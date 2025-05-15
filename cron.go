@@ -2,6 +2,7 @@ package golitecron
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,7 +13,38 @@ var (
 	ErrInvalidStep = errors.New("invalid step value")
 )
 
-type CronExpr struct {
+type FieldType int
+
+const (
+	Seconds FieldType = iota
+	Minutes
+	Hours
+	DayOfMonth
+	Month
+	DayOfWeek
+	Year
+)
+
+type parseRule struct {
+	field     FieldType
+	min       int
+	max       int
+	radix     int
+	require   bool
+	parseFunc func(string, int, int, int) ([]int, error)
+}
+
+var defaultRules = []parseRule{
+	{Seconds, 0, 59, 60, false, parseItem},
+	{Minutes, 0, 59, 60, true, parseItem},
+	{Hours, 0, 23, 24, true, parseItem},
+	{DayOfMonth, 1, 31, 31, true, parseItem},
+	{Month, 1, 12, 12, true, parseItem},
+	{DayOfWeek, 0, 6, 7, true, parseItem},
+	{Year, 2025, 2100, 1, false, parseItem},
+}
+
+type Cron struct {
 	Seconds    map[int]struct{}
 	Minutes    map[int]struct{}
 	Hours      map[int]struct{}
@@ -20,75 +52,93 @@ type CronExpr struct {
 	Month      map[int]struct{}
 	DayOfWeek  map[int]struct{}
 	Year       map[int]struct{}
+
+	enableSeconds bool
+	enableYear    bool
 }
 
-func NewCron(expr string) *CronExpr {
-	cron, err := parse(expr)
-	if err != nil {
-		return nil
+type Option func(*Cron)
+
+func EnableSeconds() Option {
+	return func(cron *Cron) {
+		cron.enableSeconds = true
 	}
-	return cron
 }
 
-func parse(cron string) (*CronExpr, error) {
+func EnableYear() Option {
+	return func(cron *Cron) {
+		cron.enableYear = true
+	}
+}
+
+func NewCron(expr string, opts ...Option) (*Cron, error) {
+	c := &Cron{}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	parsed, err := c.parse(expr)
+	if err != nil {
+		return nil, err
+	}
+
+	fieldMap := map[FieldType]func([]int){
+		Seconds:    func(vals []int) { c.Seconds = toMap(vals) },
+		Minutes:    func(vals []int) { c.Minutes = toMap(vals) },
+		Hours:      func(vals []int) { c.Hours = toMap(vals) },
+		DayOfMonth: func(vals []int) { c.DayOfMonth = toMap(vals) },
+		Month:      func(vals []int) { c.Month = toMap(vals) },
+		DayOfWeek:  func(vals []int) { c.DayOfWeek = toMap(vals) },
+		Year:       func(vals []int) { c.Year = toMap(vals) },
+	}
+
+	for f, v := range parsed {
+		if fun, ok := fieldMap[FieldType(f)]; ok {
+			fun(v)
+		}
+	}
+
+	return c, nil
+}
+
+func (c *Cron) parse(cron string) (map[FieldType][]int, error) {
 	terms := strings.Fields(cron)
 
-	if len(terms) != 6 {
-		return nil, ErrInvalidExpr
+	rules := make([]parseRule, 0, len(defaultRules))
+	for _, rule := range defaultRules {
+		if rule.field == Seconds && !c.enableSeconds || rule.field == Year && !c.enableYear {
+			continue
+		}
+		rules = append(rules, rule)
 	}
 
-	seconds, err := parseExpr(terms[0], 0, 59, 60)
-	if err != nil {
-		return nil, err
-	}
-	minutes, err := parseExpr(terms[1], 0, 59, 60)
-	if err != nil {
-		return nil, err
-	}
-	hours, err := parseExpr(terms[2], 0, 23, 24)
-	if err != nil {
-		return nil, err
-	}
-	dayOfMonth, err := parseExpr(terms[3], 1, 31, 31)
-	if err != nil {
-		return nil, err
-	}
-	month, err := parseExpr(terms[4], 1, 12, 12)
-	if err != nil {
-		return nil, err
-	}
-	dayOfWeek, err := parseExpr(terms[5], 0, 6, 7)
-	if err != nil {
-		return nil, err
-	}
-	year, err := parseExpr(terms[6], 2025, 2100, 1)
-	if err != nil {
-		return nil, err
+	if len(terms) != len(rules) {
+		return nil, fmt.Errorf("invalid cron expression format: expected %d terms, got %d", len(rules), len(terms))
 	}
 
-	cronExpr := &CronExpr{
-		Seconds:    seconds,
-		Minutes:    minutes,
-		Hours:      hours,
-		DayOfMonth: dayOfMonth,
-		Month:      month,
-		DayOfWeek:  dayOfWeek,
-		Year:       year,
+	result := make(map[FieldType][]int, len(rules))
+
+	for i, term := range terms {
+		rule := rules[i]
+		vals, err := rule.parseFunc(term, rule.min, rule.max, rule.radix)
+		if err != nil {
+			return nil, err
+		}
+		if len(vals) == 0 {
+			return nil, ErrInvalidExpr
+		}
+		result[rule.field] = vals
 	}
 
-	return cronExpr, nil
+	return result, nil
 }
 
-func parseExpr(expr string, min, max, radix int) (map[int]struct{}, error) {
-	parsed, err := parseItem(expr, min, max, radix)
-	if err != nil {
-		return nil, err
-	}
+func toMap(vals []int) map[int]struct{} {
 	res := make(map[int]struct{})
-	for _, v := range parsed {
+	for _, v := range vals {
 		res[v] = struct{}{}
 	}
-	return res, nil
+	return res
 }
 
 func parseItem(expr string, min, max, radix int) ([]int, error) {
