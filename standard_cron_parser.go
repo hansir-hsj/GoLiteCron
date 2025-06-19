@@ -104,6 +104,30 @@ func parseField(field string, min, max int) (map[int]struct{}, error) {
 		return result, nil
 	}
 
+	if strings.Contains(field, "/") {
+		parts := strings.Split(field, "/")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid step format: %s", field)
+		}
+
+		step, err := strconv.Atoi(parts[1])
+		if err != nil || step <= 0 {
+			return nil, fmt.Errorf("invalid step value: %s", parts[1])
+		}
+
+		radix := max - min + 1
+		if radix%step != 0 {
+			return nil, fmt.Errorf("invalid step value: %s", parts[1])
+		}
+
+		result := make(map[int]struct{})
+		for i := min; i <= max; i += step {
+			result[i] = struct{}{}
+		}
+
+		return result, nil
+	}
+
 	num, err := strconv.Atoi(field)
 	if err != nil || num < min || num > max {
 		return nil, fmt.Errorf("invalid number: %s", field)
