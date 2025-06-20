@@ -1,28 +1,30 @@
 package golitecron
 
 import (
-	"container/heap"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 )
 
+const (
+	DefTickDuration = time.Minute
+	DefWheelSize    = 60 // 1 hour in minutes
+)
+
 type Scheduler struct {
-	taskQueue TaskQueue
-	mu        sync.Mutex
-	wg        sync.WaitGroup
-	stopChan  chan struct{}
-	running   bool
+	taskTimeWheel *TimeWheel
+	mu            sync.Mutex
+	wg            sync.WaitGroup
+	stopChan      chan struct{}
+	running       bool
 }
 
 func NewScheduler() *Scheduler {
 	s := &Scheduler{
-		taskQueue: make(TaskQueue, 0),
-		stopChan:  make(chan struct{}),
-		running:   false,
+		taskTimeWheel: NewTimeWheel(DefTickDuration, DefWheelSize),
+		stopChan:      make(chan struct{}),
 	}
-	heap.Init(&s.taskQueue)
 	return s
 }
 
@@ -30,10 +32,8 @@ func (s *Scheduler) AddTask(id string, job Job, expr CronParser) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, task := range s.taskQueue {
-		if task.ID == id {
-			return fmt.Errorf("task with ID %s already exists", id)
-		}
+	if s.taskTimeWheel.TaskExist(id) {
+		return fmt.Errorf("task with ID %s already exists", id)
 	}
 
 	now := time.Now()
@@ -44,8 +44,7 @@ func (s *Scheduler) AddTask(id string, job Job, expr CronParser) error {
 		NextRunTime: expr.Next(now),
 		PreRunTime:  now,
 	}
-
-	heap.Push(&s.taskQueue, task)
+	s.taskTimeWheel.AddTask(task)
 
 	return nil
 }
@@ -54,12 +53,12 @@ func (s *Scheduler) RemoveTask(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for i, task := range s.taskQueue {
-		if task.ID == id {
-			heap.Remove(&s.taskQueue, i)
-			return true
-		}
+	if !s.taskTimeWheel.TaskExist(id) {
+		return false
 	}
+
+	s.taskTimeWheel.RemoveTask(&Task{ID: id})
+
 	return false
 }
 
@@ -91,51 +90,48 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) run() {
 	defer s.wg.Done()
 
-	for {
+	ticker := time.NewTicker(s.taskTimeWheel.tickDuration)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.taskTimeWheel.currentTick = (s.taskTimeWheel.currentTick + 1) % s.taskTimeWheel.wheelSize
+
 		s.mu.Lock()
-		if len(s.taskQueue) == 0 {
+		slot := s.taskTimeWheel.slots[s.taskTimeWheel.currentTick]
+		if slot.Len() == 0 {
 			s.mu.Unlock()
-			select {
-			case <-time.After(1 * time.Second):
-				continue
-			case <-s.stopChan:
-				return
-			}
-		}
-
-		task := s.taskQueue[0]
-		now := time.Now()
-
-		if task.NextRunTime.After(now) {
-			waitTime := task.NextRunTime.Sub(now)
-			s.mu.Unlock()
-
-			select {
-			case <-time.After(waitTime):
-			case <-s.stopChan:
-				return
-			}
 			continue
 		}
 
-		heap.Pop(&s.taskQueue)
+		tasksToExecute := make([]*Task, 0, slot.Len())
+		for e := slot.Front(); e != nil; e = e.Next() {
+			task := e.Value.(*Task)
+			tasksToExecute = append(tasksToExecute, task)
+		}
+		slot.Init()
 		s.mu.Unlock()
 
-		task.PreRunTime = now
-		task.NextRunTime = task.Expr.Next(now)
+		now := time.Now()
+		for _, task := range tasksToExecute {
+			s.wg.Add(1)
+			go func(t *Task) {
+				defer s.wg.Done()
 
-		// run asynchronously
-		s.wg.Add(1)
-		go func(t *Task) {
-			defer s.wg.Done()
-			err := t.Job.Execute()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
-			}
-		}(task)
+				err := task.Job.Execute()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
+				}
 
-		s.mu.Lock()
-		heap.Push(&s.taskQueue, task)
-		s.mu.Unlock()
+				task.PreRunTime = now
+				task.NextRunTime = task.Expr.Next(now)
+
+				s.mu.Lock()
+				s.taskTimeWheel.AddTask(task)
+				s.mu.Unlock()
+
+			}(task)
+		}
+
 	}
+
 }
