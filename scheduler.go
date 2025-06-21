@@ -94,9 +94,8 @@ func (s *Scheduler) run() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		s.taskTimeWheel.currentTick = (s.taskTimeWheel.currentTick + 1) % s.taskTimeWheel.wheelSize
-
 		s.mu.Lock()
+		s.taskTimeWheel.currentTick = (s.taskTimeWheel.currentTick + 1) % s.taskTimeWheel.wheelSize
 		slot := s.taskTimeWheel.slots[s.taskTimeWheel.currentTick]
 		if slot.Len() == 0 {
 			s.mu.Unlock()
