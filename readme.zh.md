@@ -2,16 +2,16 @@
 
 [en](readme.md) [zh](readme.zh.md)
 
-A lightweight Cron framework
+轻量化的Cron框架
 
-### Installation
+### 安装方法
 ```
 go get -u github.com/GoLite/GoLiteCron
 ```
 
-### Usage
+### 使用方法
 ```
-// Define the task
+// 定义任务
 type MyJob struct {
 	ID string
 }
@@ -30,9 +30,9 @@ expr, err := cron.NewStandardCronParser("*/30 * * * *")
 if err != nil {
     log.Fatalf("Failed to parse cron expression: %v", err)
 }
-// Register the task
+// 注册任务
 scheduler.AddTask(job.GetID(), job, expr)
 
-// Start the scheduler
+// 启动调度器
 scheduler.Start()
 ```
