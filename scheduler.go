@@ -8,31 +8,48 @@ import (
 )
 
 const (
-	DefTickDuration = time.Minute
-	DefWheelSize    = 60 // 1 hour in minutes
+	DefaultTickDuration = 100 * time.Millisecond // 100 milliseconds
+)
+
+type StorageType int
+
+const (
+	StorageTypeHeap StorageType = iota
+	StorageTypeTimeWheel
 )
 
 type Scheduler struct {
-	taskTimeWheel *TimeWheel
-	mu            sync.Mutex
-	wg            sync.WaitGroup
-	stopChan      chan struct{}
-	running       bool
+	taskStorage TaskStorage
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	stopChan    chan struct{}
+	running     bool
 }
 
-func NewScheduler() *Scheduler {
-	s := &Scheduler{
-		taskTimeWheel: NewTimeWheel(DefTickDuration, DefWheelSize),
-		stopChan:      make(chan struct{}),
+func NewScheduler(storageType ...StorageType) *Scheduler {
+	var taskStorage TaskStorage
+	if len(storageType) == 0 {
+		storageType = append(storageType, StorageTypeHeap)
 	}
-	return s
+	switch storageType[0] {
+	case StorageTypeTimeWheel:
+		taskStorage = NewTaskTimeWheel(MinTimeWheelDuration, DefaultWheelSize)
+	case StorageTypeHeap:
+		fallthrough
+	default:
+		taskStorage = NewTaskQueue()
+	}
+	return &Scheduler{
+		taskStorage: taskStorage,
+		stopChan:    make(chan struct{}),
+	}
 }
 
 func (s *Scheduler) AddTask(id string, job Job, expr CronParser) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.taskTimeWheel.TaskExist(id) {
+	if s.taskStorage.TaskExist(id) {
 		return fmt.Errorf("task with ID %s already exists", id)
 	}
 
@@ -44,20 +61,20 @@ func (s *Scheduler) AddTask(id string, job Job, expr CronParser) error {
 		NextRunTime: expr.Next(now),
 		PreRunTime:  now,
 	}
-	s.taskTimeWheel.AddTask(task)
+	s.taskStorage.AddTask(task)
 
 	return nil
 }
 
-func (s *Scheduler) RemoveTask(id string) bool {
+func (s *Scheduler) RemoveTask(task *Task) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.taskTimeWheel.TaskExist(id) {
+	if !s.taskStorage.TaskExist(task.ID) {
 		return false
 	}
 
-	s.taskTimeWheel.RemoveTask(&Task{ID: id})
+	s.taskStorage.RemoveTask(task)
 
 	return false
 }
@@ -90,47 +107,49 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) run() {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(s.taskTimeWheel.tickDuration)
+	ticker := time.NewTicker(DefaultTickDuration)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		s.mu.Lock()
-		s.taskTimeWheel.currentTick = (s.taskTimeWheel.currentTick + 1) % s.taskTimeWheel.wheelSize
-		slot := s.taskTimeWheel.slots[s.taskTimeWheel.currentTick]
-		if slot.Len() == 0 {
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			tasksToExecute := s.taskStorage.Tick()
 			s.mu.Unlock()
-			continue
+			if len(tasksToExecute) == 0 {
+				continue
+			}
+
+			now := time.Now()
+			for _, task := range tasksToExecute {
+				s.wg.Add(1)
+				go func(t *Task) {
+					defer s.wg.Done()
+
+					s.mu.Lock()
+					if t.Running {
+						s.mu.Unlock()
+						return
+					}
+					t.Running = true
+					s.mu.Unlock()
+
+					err := t.Job.Execute()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
+					}
+
+					task.PreRunTime = now
+					task.NextRunTime = task.Expr.Next(now)
+
+					s.mu.Lock()
+					task.Running = false
+					s.taskStorage.AddTask(task)
+					s.mu.Unlock()
+				}(task)
+			}
 		}
-
-		tasksToExecute := make([]*Task, 0, slot.Len())
-		for e := slot.Front(); e != nil; e = e.Next() {
-			task := e.Value.(*Task)
-			tasksToExecute = append(tasksToExecute, task)
-		}
-		slot.Init()
-		s.mu.Unlock()
-
-		now := time.Now()
-		for _, task := range tasksToExecute {
-			s.wg.Add(1)
-			go func(t *Task) {
-				defer s.wg.Done()
-
-				err := task.Job.Execute()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
-				}
-
-				task.PreRunTime = now
-				task.NextRunTime = task.Expr.Next(now)
-
-				s.mu.Lock()
-				s.taskTimeWheel.AddTask(task)
-				s.mu.Unlock()
-
-			}(task)
-		}
-
 	}
-
 }
