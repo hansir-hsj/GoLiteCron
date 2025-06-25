@@ -30,6 +30,12 @@ expr, err := cron.NewStandardCronParser("*/30 * * * *")
 if err != nil {
     log.Fatalf("Failed to parse cron expression: %v", err)
 }
+
+// 创建调度器-基于时间轮
+scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
+// 创建调度器-基于堆
+// scheduler := cron.NewScheduler(cron.StorageTypeHeap)
+
 // 注册任务
 scheduler.AddTask(job.GetID(), job, expr)
 
