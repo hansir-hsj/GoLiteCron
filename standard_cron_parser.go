@@ -16,6 +16,19 @@ type StandardCronParser struct {
 }
 
 func NewStandardCronParser(expr string) (*StandardCronParser, error) {
+	if strings.HasPrefix(expr, "@") {
+		switch expr {
+		case "@monthly":
+			expr = Monthly
+		case "@weekly":
+			expr = Weekly
+		case "@daily", "@midnight":
+			expr = Daily
+		case "@hourly":
+			expr = Hourly
+		}
+	}
+
 	parts := strings.Fields(expr)
 	if len(parts) != 5 {
 		return nil, fmt.Errorf("invalid cron expression: %s", expr)
