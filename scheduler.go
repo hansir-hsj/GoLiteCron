@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultTickDuration = 100 * time.Millisecond // 100 milliseconds
+	DefaultTickDuration = 500 * time.Millisecond // 100 milliseconds
 )
 
 type StorageType int
@@ -33,7 +33,7 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 	switch storageType[0] {
 	case StorageTypeTimeWheel:
-		taskStorage = NewTaskTimeWheel(MinTimeWheelDuration, DefaultWheelSize)
+		taskStorage = NewMultiLevelTimeWheel()
 	case StorageTypeHeap:
 		fallthrough
 	default:

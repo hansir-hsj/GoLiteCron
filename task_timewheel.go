@@ -10,6 +10,62 @@ const (
 	DefaultWheelSize     = 60
 )
 
+type MultiLevelTimeWheel struct {
+	timeWheels []*TaskTimeWheel
+}
+
+func NewMultiLevelTimeWheel() *MultiLevelTimeWheel {
+	timeWheels := []*TaskTimeWheel{
+		newTaskTimeWheel(time.Minute, 60),
+		newTaskTimeWheel(time.Hour, 24),
+		newTaskTimeWheel(24*time.Hour, 365),
+	}
+	return &MultiLevelTimeWheel{
+		timeWheels: timeWheels,
+	}
+}
+
+func (mltw *MultiLevelTimeWheel) TaskExist(taskID string) bool {
+	for _, tw := range mltw.timeWheels {
+		if tw.taskExist(taskID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (mltw *MultiLevelTimeWheel) AddTask(task *Task) {
+	now := time.Now()
+	duration := task.NextRunTime.Sub(now)
+	switch {
+	case duration < time.Hour:
+		mltw.timeWheels[0].addTask(task)
+	case duration < 24*time.Hour:
+		mltw.timeWheels[1].addTask(task)
+	default:
+		mltw.timeWheels[2].addTask(task)
+	}
+}
+
+func (mltw *MultiLevelTimeWheel) RemoveTask(task *Task) {
+	for _, tw := range mltw.timeWheels {
+		if tw.taskExist(task.ID) {
+			tw.removeTask(task)
+			break
+		}
+	}
+}
+
+func (mltw *MultiLevelTimeWheel) Tick() []*Task {
+	now := time.Now()
+	var tasks []*Task
+	for _, tw := range mltw.timeWheels {
+		twTasks := tw.tick(now)
+		tasks = append(tasks, twTasks...)
+	}
+	return tasks
+}
+
 type TaskTimeWheel struct {
 	tickDuration time.Duration
 	wheelSize    int
@@ -20,7 +76,7 @@ type TaskTimeWheel struct {
 	tasks map[string]int
 }
 
-func NewTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel {
+func newTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel {
 	if tickDuration <= 0 {
 		tickDuration = MinTimeWheelDuration
 	}
@@ -42,28 +98,25 @@ func NewTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel 
 	}
 }
 
-func (tw *TaskTimeWheel) TaskExist(taskID string) bool {
+func (tw *TaskTimeWheel) taskExist(taskID string) bool {
 	_, exists := tw.tasks[taskID]
 	return exists
 }
 
-func (tw *TaskTimeWheel) AddTask(task *Task) {
+func (tw *TaskTimeWheel) addTask(task *Task) {
 	nextRunTime := task.NextRunTime
-
-	minuteOfHour := nextRunTime.Minute()
-
-	slotIndex := minuteOfHour % tw.wheelSize
+	slotIndex := int(nextRunTime.Sub(tw.preTickTime)/tw.tickDuration) % tw.wheelSize
 
 	// remove task if it already exists in the wheel
 	if _, exist := tw.tasks[task.ID]; exist {
-		tw.RemoveTask(task)
+		tw.removeTask(task)
 	}
 
 	tw.slots[slotIndex].PushBack(task)
 	tw.tasks[task.ID] = slotIndex
 }
 
-func (tw *TaskTimeWheel) RemoveTask(task *Task) {
+func (tw *TaskTimeWheel) removeTask(task *Task) {
 	slotIndex := tw.tasks[task.ID]
 	for e := tw.slots[slotIndex].Front(); e != nil; e = e.Next() {
 		if e.Value.(*Task).ID == task.ID {
@@ -74,11 +127,8 @@ func (tw *TaskTimeWheel) RemoveTask(task *Task) {
 	}
 }
 
-func (tw *TaskTimeWheel) Tick() []*Task {
-	now := time.Now()
-
-	currentMinute := now.Minute()
-	slotIndex := currentMinute % tw.wheelSize
+func (tw *TaskTimeWheel) tick(now time.Time) []*Task {
+	slotIndex := int(now.Sub(tw.preTickTime)/tw.tickDuration) % tw.wheelSize
 
 	if tw.slots[slotIndex].Len() == 0 {
 		return nil
