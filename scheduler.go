@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultTickDuration = time.Second * 1
+	DefaultTickDuration = time.Millisecond * 200
 )
 
 type StorageType int

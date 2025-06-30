@@ -222,7 +222,7 @@ func (p *StandardCronParser) Next(t time.Time) time.Time {
 	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
 	for {
-		next = next.Add(DefaultTickDuration)
+		next = next.Add(time.Second)
 		if contains(p.seconds, next.Second()) &&
 			(!p.enableYears || contains(p.years, next.Year())) &&
 			contains(p.minutes, next.Minute()) &&
