@@ -7,15 +7,63 @@ import (
 	"time"
 )
 
+type FieldType int
+
+const (
+	Seconds FieldType = iota
+	Minutes
+	Hours
+	DayOfMonth
+	Months
+	DayOfWeek
+	Years
+)
+
+type parseRule struct {
+	field     FieldType
+	min       int
+	max       int
+	parseFunc func(string, int, int) (map[int]struct{}, error)
+}
+
 type StandardCronParser struct {
+	seconds    map[int]struct{}
 	minutes    map[int]struct{}
 	hours      map[int]struct{}
 	dayOfMonth map[int]struct{}
 	months     map[int]struct{}
 	dayOfWeek  map[int]struct{}
+	years      map[int]struct{}
+
+	enableSeconds bool
+	enableYears   bool
 }
 
-func NewStandardCronParser(expr string) (*StandardCronParser, error) {
+type Option func(*StandardCronParser)
+
+func WithSeconds() Option {
+	return func(p *StandardCronParser) {
+		p.enableSeconds = true
+	}
+}
+
+func WithYears() Option {
+	return func(p *StandardCronParser) {
+		p.enableYears = true
+	}
+}
+
+var defaultRules = []parseRule{
+	{Seconds, 0, 59, parseField},
+	{Minutes, 0, 59, parseField},
+	{Hours, 0, 23, parseField},
+	{DayOfMonth, 1, 31, parseField},
+	{Months, 1, 12, parseField},
+	{DayOfWeek, 0, 6, parseField},
+	{Years, 1970, 2099, parseField},
+}
+
+func NewStandardCronParser(expr string, opts ...Option) (*StandardCronParser, error) {
 	if strings.HasPrefix(expr, "@") {
 		switch expr {
 		case "@monthly":
@@ -29,38 +77,53 @@ func NewStandardCronParser(expr string) (*StandardCronParser, error) {
 		}
 	}
 
-	parts := strings.Fields(expr)
-	if len(parts) != 5 {
-		return nil, fmt.Errorf("invalid cron expression: %s", expr)
-	}
-
 	parser := &StandardCronParser{}
-	var err error
-
-	parser.minutes, err = parseField(parts[0], 0, 59)
-	if err != nil {
-		return nil, fmt.Errorf("invalid minutes field: %v", err)
+	for _, opt := range opts {
+		opt(parser)
 	}
 
-	parser.hours, err = parseField(parts[1], 0, 23)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hours field: %v", err)
+	parts := strings.Fields(expr)
+	rules := make([]parseRule, 0, len(defaultRules))
+	for _, rule := range defaultRules {
+		if rule.field == Seconds && !parser.enableSeconds ||
+			rule.field == Years && !parser.enableYears {
+			continue
+		}
+		rules = append(rules, rule)
 	}
 
-	parser.dayOfMonth, err = parseField(parts[2], 1, 31)
-	if err != nil {
-		return nil, fmt.Errorf("invalid day of month field: %v", err)
+	if len(parts) != len(rules) {
+		return nil, fmt.Errorf("invalid cron expression length: expected %d fields, got %d", len(rules), len(parts))
 	}
 
-	parser.months, err = parseField(parts[3], 1, 12)
-	if err != nil {
-		return nil, fmt.Errorf("invalid months field: %v", err)
+	parsed := make(map[FieldType]map[int]struct{}, len(parts))
+	for i, part := range parts {
+		rule := rules[i]
+		vals, err := rule.parseFunc(part, rule.min, rule.max)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing field %d (%s): %v", i, part, err)
+		}
+		if len(vals) == 0 {
+			return nil, fmt.Errorf("invalid field %d (%s)", i, part)
+		}
+		parsed[rule.field] = vals
 	}
 
-	parser.dayOfWeek, err = parseField(parts[4], 0, 6)
-	if err != nil {
-		return nil, fmt.Errorf("invalid day of week field: %v", err)
+	fieldMap := map[FieldType]func(map[int]struct{}){
+		Seconds:    func(vals map[int]struct{}) { parser.seconds = vals },
+		Minutes:    func(vals map[int]struct{}) { parser.minutes = vals },
+		Hours:      func(vals map[int]struct{}) { parser.hours = vals },
+		DayOfMonth: func(vals map[int]struct{}) { parser.dayOfMonth = vals },
+		Months:     func(vals map[int]struct{}) { parser.months = vals },
+		DayOfWeek:  func(vals map[int]struct{}) { parser.dayOfWeek = vals },
+		Years:      func(vals map[int]struct{}) { parser.years = vals },
 	}
+
+	for f, v := range parsed {
+		fieldMap[f](v)
+	}
+
+	parser.normalization()
 
 	return parser, nil
 }
@@ -149,17 +212,26 @@ func parseField(field string, min, max int) (map[int]struct{}, error) {
 	return map[int]struct{}{num: {}}, nil
 }
 
+func (p *StandardCronParser) normalization() {
+	if len(p.seconds) == 0 {
+		p.seconds = map[int]struct{}{0: {}}
+	}
+}
+
 func (p *StandardCronParser) Next(t time.Time) time.Time {
-	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, t.Location()).Add(time.Minute)
+	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
 	for {
-		if contains(p.minutes, next.Minute()) && contains(p.hours, next.Hour()) &&
+		next = next.Add(DefaultTickDuration)
+		if contains(p.seconds, next.Second()) &&
+			(!p.enableYears || contains(p.years, next.Year())) &&
+			contains(p.minutes, next.Minute()) &&
+			contains(p.hours, next.Hour()) &&
 			contains(p.dayOfWeek, int(next.Weekday())) &&
 			contains(p.months, int(next.Month())) &&
 			contains(p.dayOfMonth, next.Day()) {
 			return next
 		}
-		next = next.Add(time.Minute)
 	}
 }
 

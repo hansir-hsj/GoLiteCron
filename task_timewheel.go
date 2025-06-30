@@ -16,6 +16,7 @@ type MultiLevelTimeWheel struct {
 
 func NewMultiLevelTimeWheel() *MultiLevelTimeWheel {
 	timeWheels := []*TaskTimeWheel{
+		newTaskTimeWheel(time.Second, 60),
 		newTaskTimeWheel(time.Minute, 60),
 		newTaskTimeWheel(time.Hour, 24),
 		newTaskTimeWheel(24*time.Hour, 365),
@@ -38,12 +39,14 @@ func (mltw *MultiLevelTimeWheel) AddTask(task *Task) {
 	now := time.Now()
 	duration := task.NextRunTime.Sub(now)
 	switch {
-	case duration < time.Hour:
+	case duration < time.Second:
 		mltw.timeWheels[0].addTask(task)
-	case duration < 24*time.Hour:
+	case duration < time.Hour:
 		mltw.timeWheels[1].addTask(task)
-	default:
+	case duration < 24*time.Hour:
 		mltw.timeWheels[2].addTask(task)
+	default:
+		mltw.timeWheels[3].addTask(task)
 	}
 }
 

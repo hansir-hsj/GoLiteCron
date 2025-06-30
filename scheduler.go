@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultTickDuration = 500 * time.Millisecond // 100 milliseconds
+	DefaultTickDuration = time.Second * 1
 )
 
 type StorageType int
@@ -141,10 +141,9 @@ func (s *Scheduler) run() {
 						fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
 					}
 
+					s.mu.Lock()
 					task.PreRunTime = now
 					task.NextRunTime = task.Expr.Next(now)
-
-					s.mu.Lock()
 					task.Running = false
 					s.taskStorage.AddTask(task)
 					s.mu.Unlock()

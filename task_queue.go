@@ -72,8 +72,8 @@ func (tq *TaskQueue) Tick() []*Task {
 		if t.NextRunTime.After(now) {
 			continue
 		}
-		task := heap.Pop(tq).(*Task)
-		tasks = append(tasks, task)
+		tq.RemoveTask(t)
+		tasks = append(tasks, t)
 	}
 
 	return tasks
