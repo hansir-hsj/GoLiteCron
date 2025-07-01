@@ -66,6 +66,8 @@ var defaultRules = []parseRule{
 func NewStandardCronParser(expr string, opts ...Option) (*StandardCronParser, error) {
 	if strings.HasPrefix(expr, "@") {
 		switch expr {
+		case "@yearly", "@annually":
+			expr = Yearly
 		case "@monthly":
 			expr = Monthly
 		case "@weekly":
