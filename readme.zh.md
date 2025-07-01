@@ -9,6 +9,15 @@
 go get -u github.com/GoLite/GoLiteCron
 ```
 
+### 特性
+- Cron表达式
+  - 参考 [Wiki](https://en.wikipedia.org/wiki/Cron)
+  - 样例: 
+    - `*/30 * * * *` 每30分钟一次
+    - `0/2 * * * * *` 每两秒一次 (必须使用WithSeconds选项)
+    - `0 * * * * * 2025-2026` 2025年到2026年每秒一次 (必须使用WithYears选项)
+- 支持多个存储类型: TimeWheel 和 Heap
+
 ### 使用方法
 ```
 // 定义任务

@@ -9,6 +9,15 @@ A lightweight Cron framework
 go get -u github.com/GoLite/GoLiteCron
 ```
 
+### Features
+- Support Cron expressions
+  - see [Wiki](https://en.wikipedia.org/wiki/Cron)
+  - Example: 
+    - `*/30 * * * *` every 30 minutes
+    - `0/2 * * * * *` every 2 seconds (must use WithSeconds option)
+    - `0 * * * * * 2025-2026` every seconds in 2025-2026 (must use WithYears option)
+- Support multiple storage types: TimeWheel and Heap
+
 ### Usage
 ```
 // Define the task
