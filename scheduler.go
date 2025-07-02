@@ -45,9 +45,11 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 }
 
-func (s *Scheduler) AddTask(id string, job Job, expr CronParser) error {
+func (s *Scheduler) AddTask(expr CronParser, job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	id := job.GetID()
 
 	if s.taskStorage.TaskExist(id) {
 		return fmt.Errorf("task with ID %s already exists", id)
