@@ -76,6 +76,8 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 			expr = Daily
 		case "@hourly":
 			expr = Hourly
+		case "@minutely":
+			expr = Minutely
 		}
 	}
 
