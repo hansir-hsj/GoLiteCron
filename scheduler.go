@@ -132,7 +132,12 @@ func (s *Scheduler) run() {
 			for _, task := range tasksToExecute {
 				s.wg.Add(1)
 				go func(t *Task) {
-					defer s.wg.Done()
+					defer func() {
+						s.wg.Done()
+						if r := recover(); r != nil {
+							fmt.Fprintf(os.Stderr, "Recovered from panic in task %s: %v\n", t.ID, r)
+						}
+					}()
 
 					s.mu.Lock()
 					if t.Running {
