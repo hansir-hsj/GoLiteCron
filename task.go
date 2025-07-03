@@ -8,7 +8,7 @@ import (
 type Task struct {
 	ID          string
 	Job         Job
-	Expr        CronParser
+	CronParser  *CronParser
 	NextRunTime time.Time
 	PreRunTime  time.Time
 

@@ -45,22 +45,26 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 }
 
-func (s *Scheduler) AddTask(expr CronParser, job Job) error {
+func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := job.ID()
-
 	if s.taskStorage.TaskExist(id) {
 		return fmt.Errorf("task with ID %s already exists", id)
+	}
+
+	parser, err := newCronParser(expr, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to parse cron expression: %w", err)
 	}
 
 	now := time.Now()
 	task := &Task{
 		ID:          id,
 		Job:         job,
-		Expr:        expr,
-		NextRunTime: expr.Next(now),
+		CronParser:  parser,
+		NextRunTime: parser.Next(now),
 		PreRunTime:  now,
 	}
 	s.taskStorage.AddTask(task)
@@ -145,7 +149,7 @@ func (s *Scheduler) run() {
 
 					s.mu.Lock()
 					task.PreRunTime = now
-					task.NextRunTime = task.Expr.Next(now)
+					task.NextRunTime = task.CronParser.Next(now)
 					task.Running = false
 					s.taskStorage.AddTask(task)
 					s.mu.Unlock()
