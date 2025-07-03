@@ -49,7 +49,7 @@ func (s *Scheduler) AddTask(expr CronParser, job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id := job.GetID()
+	id := job.ID()
 
 	if s.taskStorage.TaskExist(id) {
 		return fmt.Errorf("task with ID %s already exists", id)

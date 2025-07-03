@@ -22,19 +22,19 @@ go get -u github.com/GoLite/GoLiteCron
 ```
 // Define the task
 type MyJob struct {
-	ID string
+	Id string
 }
 
 func (j *MyJob) Execute() error {
-	fmt.Printf("Job %s is running at %s\n", j.ID, time.Now().Format(time.RFC3339))
+	fmt.Printf("Job %s is running at %s\n", j.Id, time.Now().Format(time.RFC3339))
 	return nil
 }
 
-func (j *MyJob) GetID() string {
-	return j.ID
+func (j *MyJob) ID() string {
+	return j.Id
 }
 
-job := &MyJob{ID: "every-30-min-job"}
+job := &MyJob{Id: "every-30-min-job"}
 expr, err := cron.NewStandardCronParser("*/30 * * * *")
 if err != nil {
     log.Fatalf("Failed to parse cron expression: %v", err)
@@ -46,7 +46,7 @@ scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
 // scheduler := cron.NewScheduler(cron.StorageTypeHeap)
 
 // Register the task
-scheduler.AddTask(job.GetID(), job, expr)
+scheduler.AddTask(expr, job)
 
 // Start the scheduler
 scheduler.Start()
