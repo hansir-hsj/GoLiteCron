@@ -19,7 +19,7 @@ go get -u github.com/GoLite/GoLiteCron
 - 支持多个存储类型: TimeWheel 和 Heap
 
 ### 使用方法
-```
+```go
 // 创建调度器-基于时间轮
 scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
 
