@@ -19,34 +19,15 @@ go get -u github.com/GoLite/GoLiteCron
 - Support multiple storage types: TimeWheel and Heap
 
 ### Usage
-```
-// Define the task
-type MyJob struct {
-	Id string
-}
-
-func (j *MyJob) Execute() error {
-	fmt.Printf("Job %s is running at %s\n", j.Id, time.Now().Format(time.RFC3339))
-	return nil
-}
-
-func (j *MyJob) ID() string {
-	return j.Id
-}
-
-job := &MyJob{Id: "every-30-min-job"}
-expr, err := cron.NewStandardCronParser("*/30 * * * *")
-if err != nil {
-    log.Fatalf("Failed to parse cron expression: %v", err)
-}
-
+```go
 // Create a new scheduler based on TimeWheel
 scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-// Create a new schedule based on Heap
-// scheduler := cron.NewScheduler(cron.StorageTypeHeap)
 
 // Register the task
-scheduler.AddTask(expr, job)
+scheduler.AddTask("@minutely", cron.WrapJob("minutely-job", func() error {
+	fmt.Printf("Job %s is running at %s\n", "minutely-job", time.Now().Format(time.RFC3339))
+	return nil
+}))
 
 // Start the scheduler
 scheduler.Start()

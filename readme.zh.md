@@ -20,33 +20,14 @@ go get -u github.com/GoLite/GoLiteCron
 
 ### 使用方法
 ```
-// 定义任务
-type MyJob struct {
-	Id string
-}
-
-func (j *MyJob) Execute() error {
-	fmt.Printf("Job %s is running at %s\n", j.Id, time.Now().Format(time.RFC3339))
-	return nil
-}
-
-func (j *MyJob) ID() string {
-	return j.Id
-}
-
-job := &MyJob{Id: "every-30-min-job"}
-expr, err := cron.NewStandardCronParser("*/30 * * * *")
-if err != nil {
-    log.Fatalf("Failed to parse cron expression: %v", err)
-}
-
 // 创建调度器-基于时间轮
 scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-// 创建调度器-基于堆
-// scheduler := cron.NewScheduler(cron.StorageTypeHeap)
 
 // 注册任务
-scheduler.AddTask(expr, job)
+scheduler.AddTask("@minutely", cron.WrapJob("minutely-job", func() error {
+	fmt.Printf("Job %s is running at %s\n", "minutely-job", time.Now().Format(time.RFC3339))
+	return nil
+}))
 
 // 启动调度器
 scheduler.Start()
