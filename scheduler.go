@@ -152,9 +152,12 @@ func (s *Scheduler) run() {
 						fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
 					}
 
+					// Convert the current time to the time zone of the task
+					nowInLocation := now.In(t.CronParser.location)
+
 					s.mu.Lock()
-					task.PreRunTime = now
-					task.NextRunTime = task.CronParser.Next(now)
+					task.PreRunTime = nowInLocation
+					task.NextRunTime = task.CronParser.Next(nowInLocation)
 					task.Running = false
 					s.taskStorage.AddTask(task)
 					s.mu.Unlock()

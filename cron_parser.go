@@ -37,6 +37,7 @@ type CronParser struct {
 
 	enableSeconds bool
 	enableYears   bool
+	location      *time.Location
 }
 
 type Option func(*CronParser)
@@ -50,6 +51,12 @@ func WithSeconds() Option {
 func WithYears() Option {
 	return func(p *CronParser) {
 		p.enableYears = true
+	}
+}
+
+func WithLocation(loc *time.Location) Option {
+	return func(p *CronParser) {
+		p.location = loc
 	}
 }
 
@@ -81,7 +88,9 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 		}
 	}
 
-	parser := &CronParser{}
+	parser := &CronParser{
+		location: time.Local,
+	}
 	for _, opt := range opts {
 		opt(parser)
 	}
@@ -223,6 +232,7 @@ func (p *CronParser) normalization() {
 }
 
 func (p *CronParser) Next(t time.Time) time.Time {
+	t = t.In(p.location)
 	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
 	for {
