@@ -69,14 +69,18 @@ func (mltw *MultiLevelTimeWheel) Tick() []*Task {
 	return tasks
 }
 
+type entry struct {
+	SlotIndex int
+	Element   *list.Element
+}
+
 type TaskTimeWheel struct {
 	tickDuration time.Duration
 	wheelSize    int
 	slots        []*list.List
 	preTickTime  time.Time
 
-	// taskId => slotIndex
-	tasks map[string]int
+	tasks map[string]entry
 }
 
 func newTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel {
@@ -97,7 +101,7 @@ func newTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel 
 		wheelSize:    wheelSize,
 		slots:        slots,
 		preTickTime:  time.Now(),
-		tasks:        make(map[string]int),
+		tasks:        make(map[string]entry),
 	}
 }
 
@@ -115,19 +119,23 @@ func (tw *TaskTimeWheel) addTask(task *Task) {
 		tw.removeTask(task)
 	}
 
-	tw.slots[slotIndex].PushBack(task)
-	tw.tasks[task.ID] = slotIndex
+	e := tw.slots[slotIndex].PushBack(task)
+	tw.tasks[task.ID] = entry{
+		SlotIndex: slotIndex,
+		Element:   e,
+	}
 }
 
 func (tw *TaskTimeWheel) removeTask(task *Task) {
-	slotIndex := tw.tasks[task.ID]
-	for e := tw.slots[slotIndex].Front(); e != nil; e = e.Next() {
-		if e.Value.(*Task).ID == task.ID {
-			tw.slots[slotIndex].Remove(e)
-			delete(tw.tasks, task.ID)
-			break
-		}
+	entry, ok := tw.tasks[task.ID]
+	if !ok {
+		return
 	}
+	if entry.Element == nil {
+		return
+	}
+	tw.slots[entry.SlotIndex].Remove(entry.Element)
+	delete(tw.tasks, task.ID)
 }
 
 func (tw *TaskTimeWheel) tick(now time.Time) []*Task {
