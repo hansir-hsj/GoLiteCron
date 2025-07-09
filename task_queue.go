@@ -52,6 +52,14 @@ func (tq *TaskQueue) AddTask(task *Task) {
 	heap.Push(tq, task)
 }
 
+func (tq *TaskQueue) GetTasks() []*Task {
+	tasks := make([]*Task, 0, tq.Len())
+	for _, task := range *tq {
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
 func (tq *TaskQueue) RemoveTask(task *Task) {
 	for i, t := range *tq {
 		if t.ID == task.ID {

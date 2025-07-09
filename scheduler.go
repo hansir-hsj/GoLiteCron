@@ -45,6 +45,13 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 }
 
+func (s *Scheduler) GetTasks() []*Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.taskStorage.GetTasks()
+}
+
 func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

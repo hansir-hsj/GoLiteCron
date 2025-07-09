@@ -50,6 +50,19 @@ func (mltw *MultiLevelTimeWheel) AddTask(task *Task) {
 	}
 }
 
+func (mltw *MultiLevelTimeWheel) GetTasks() []*Task {
+	var tasks []*Task
+	for _, tw := range mltw.timeWheels {
+		for _, slot := range tw.slots {
+			for e := slot.Front(); e != nil; e = e.Next() {
+				t := e.Value.(*Task)
+				tasks = append(tasks, t)
+			}
+		}
+	}
+	return tasks
+}
+
 func (mltw *MultiLevelTimeWheel) RemoveTask(task *Task) {
 	for _, tw := range mltw.timeWheels {
 		if tw.taskExist(task.ID) {

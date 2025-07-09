@@ -5,4 +5,5 @@ type TaskStorage interface {
 	AddTask(task *Task)
 	RemoveTask(task *Task)
 	Tick() []*Task
+	GetTasks() []*Task
 }
