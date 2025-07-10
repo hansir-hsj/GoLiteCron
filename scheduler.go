@@ -20,7 +20,7 @@ const (
 
 type Scheduler struct {
 	taskStorage TaskStorage
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
 	running     bool
@@ -46,10 +46,24 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 }
 
 func (s *Scheduler) GetTasks() []*Task {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return s.taskStorage.GetTasks()
+}
+
+func (s *Scheduler) GetTaskInfo(taskID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tasks := s.taskStorage.GetTasks()
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return fmt.Sprintf("Task ID: %s, Next Run Time: %s", task.ID, task.NextRunTime.Format(time.RFC3339))
+		}
+	}
+
+	return fmt.Sprintf("Task with ID %s not found", taskID)
 }
 
 func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
