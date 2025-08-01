@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -168,7 +169,27 @@ func (s *Scheduler) run() {
 					t.Running = true
 					s.mu.Unlock()
 
-					err := t.Job.Execute()
+					// timeout control
+					var err error
+					timeout := t.CronParser.timeout
+					if timeout > 0 {
+						ctx, cancel := context.WithTimeout(context.Background(), timeout)
+						defer cancel()
+
+						done := make(chan error, 1)
+						go func() {
+							done <- t.Job.Execute()
+						}()
+
+						select {
+						case err = <-done:
+						case <-ctx.Done():
+							err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
+						}
+					} else {
+						err = t.Job.Execute()
+					}
+
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
 					}

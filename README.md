@@ -17,6 +17,11 @@ go get -u github.com/GoLite/GoLiteCron
     - `0/2 * * * * *` every 2 seconds (must use WithSeconds option)
     - `0 * * * * * 2025-2026` every seconds in 2025-2026 (must use WithYears option)
 - Support multiple storage types: TimeWheel and Heap
+- Support custom time zone
+  - Example: `scheduler.AddTask("@minutely", cron.WithLocation(time.LoadLocation("Asia/Shanghai")))`
+  - Default is UTC
+- Support task timeout
+  - Example: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
 
 ### Usage
 ```go

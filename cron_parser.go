@@ -38,6 +38,7 @@ type CronParser struct {
 	enableSeconds bool
 	enableYears   bool
 	location      *time.Location
+	timeout       time.Duration
 }
 
 type Option func(*CronParser)
@@ -57,6 +58,15 @@ func WithYears() Option {
 func WithLocation(loc *time.Location) Option {
 	return func(p *CronParser) {
 		p.location = loc
+	}
+}
+
+func WithTimeout(timeout time.Duration) Option {
+	return func(p *CronParser) {
+		if timeout < 0 {
+			timeout = 0
+		}
+		p.timeout = timeout
 	}
 }
 

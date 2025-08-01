@@ -17,6 +17,12 @@ go get -u github.com/GoLite/GoLiteCron
     - `0/2 * * * * *` 每两秒一次 (必须使用WithSeconds选项)
     - `0 * * * * * 2025-2026` 2025年到2026年每秒一次 (必须使用WithYears选项)
 - 支持多个存储类型: TimeWheel 和 Heap
+- 支持任务时区选项
+  - 样例: `scheduler.AddTask("@minutely", cron.WithLocation(time.LoadLocation("Asia/Shanghai")))`
+  - 默认 `UTC`
+- 支持任务超时时间
+  - 样例: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
+  
 
 ### 使用方法
 ```go
