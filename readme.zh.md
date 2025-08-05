@@ -22,6 +22,8 @@ go get -u github.com/GoLite/GoLiteCron
   - 默认 `UTC`
 - 支持任务超时时间
   - 样例: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
+- 支持任务重试次数
+  - 样例: `scheduler.AddTask("@minutely", cron.WithRetry(1))`
   
 
 ### 使用方法

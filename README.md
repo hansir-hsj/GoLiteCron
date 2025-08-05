@@ -22,6 +22,8 @@ go get -u github.com/GoLite/GoLiteCron
   - Default is UTC
 - Support task timeout
   - Example: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
+- Support task retry
+  - Example: `scheduler.AddTask("@minutely", cron.WithRetry(3))`
 
 ### Usage
 ```go

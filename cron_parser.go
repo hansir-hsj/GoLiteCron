@@ -39,6 +39,7 @@ type CronParser struct {
 	enableYears   bool
 	location      *time.Location
 	timeout       time.Duration
+	retry         int
 }
 
 type Option func(*CronParser)
@@ -67,6 +68,15 @@ func WithTimeout(timeout time.Duration) Option {
 			timeout = 0
 		}
 		p.timeout = timeout
+	}
+}
+
+func WithRetry(retry int) Option {
+	return func(p *CronParser) {
+		if retry < 0 {
+			retry = 0
+		}
+		p.retry = retry
 	}
 }
 

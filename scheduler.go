@@ -172,26 +172,31 @@ func (s *Scheduler) run() {
 					// timeout control
 					var err error
 					timeout := t.CronParser.timeout
-					if timeout > 0 {
-						ctx, cancel := context.WithTimeout(context.Background(), timeout)
-						defer cancel()
 
-						done := make(chan error, 1)
-						go func() {
-							done <- t.Job.Execute()
-						}()
+					for i := 0; i < t.CronParser.retry+1; i++ {
+						if timeout > 0 {
+							ctx, cancel := context.WithTimeout(context.Background(), timeout)
+							defer cancel()
 
-						select {
-						case err = <-done:
-						case <-ctx.Done():
-							err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
+							done := make(chan error, 1)
+							go func() {
+								done <- t.Job.Execute()
+							}()
+
+							select {
+							case err = <-done:
+							case <-ctx.Done():
+								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
+							}
+						} else {
+							err = t.Job.Execute()
 						}
-					} else {
-						err = t.Job.Execute()
-					}
 
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error executing task %s: %v\n", t.ID, err)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Error executing task %s: %v (retry %d)\n", t.ID, err, i)
+						} else {
+							break
+						}
 					}
 
 					// Convert the current time to the time zone of the task
