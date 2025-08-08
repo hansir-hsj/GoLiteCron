@@ -34,7 +34,7 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 	switch storageType[0] {
 	case StorageTypeTimeWheel:
-		taskStorage = NewMultiLevelTimeWheel()
+		taskStorage = NewDynamicTimeWheel()
 	case StorageTypeHeap:
 		fallthrough
 	default:

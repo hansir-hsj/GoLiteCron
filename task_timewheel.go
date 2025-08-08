@@ -2,172 +2,224 @@ package golitecron
 
 import (
 	"container/list"
+	"sync"
 	"time"
 )
 
 const (
-	MinTimeWheelDuration = time.Minute
-	DefaultWheelSize     = 60
+	BaseTickDuration = time.Second
+	DefaultWheelSize = 60
 )
-
-type MultiLevelTimeWheel struct {
-	timeWheels []*TaskTimeWheel
-}
-
-func NewMultiLevelTimeWheel() *MultiLevelTimeWheel {
-	timeWheels := []*TaskTimeWheel{
-		newTaskTimeWheel(time.Second, 60),
-		newTaskTimeWheel(time.Minute, 60),
-		newTaskTimeWheel(time.Hour, 24),
-		newTaskTimeWheel(24*time.Hour, 365),
-	}
-	return &MultiLevelTimeWheel{
-		timeWheels: timeWheels,
-	}
-}
-
-func (mltw *MultiLevelTimeWheel) TaskExist(taskID string) bool {
-	for _, tw := range mltw.timeWheels {
-		if tw.taskExist(taskID) {
-			return true
-		}
-	}
-	return false
-}
-
-func (mltw *MultiLevelTimeWheel) AddTask(task *Task) {
-	now := time.Now()
-	duration := task.NextRunTime.Sub(now)
-	switch {
-	case duration < time.Second:
-		mltw.timeWheels[0].addTask(task)
-	case duration < time.Hour:
-		mltw.timeWheels[1].addTask(task)
-	case duration < 24*time.Hour:
-		mltw.timeWheels[2].addTask(task)
-	default:
-		mltw.timeWheels[3].addTask(task)
-	}
-}
-
-func (mltw *MultiLevelTimeWheel) GetTasks() []*Task {
-	var tasks []*Task
-	for _, tw := range mltw.timeWheels {
-		for _, slot := range tw.slots {
-			for e := slot.Front(); e != nil; e = e.Next() {
-				t := e.Value.(*Task)
-				tasks = append(tasks, t)
-			}
-		}
-	}
-	return tasks
-}
-
-func (mltw *MultiLevelTimeWheel) RemoveTask(task *Task) {
-	for _, tw := range mltw.timeWheels {
-		if tw.taskExist(task.ID) {
-			tw.removeTask(task)
-			break
-		}
-	}
-}
-
-func (mltw *MultiLevelTimeWheel) Tick() []*Task {
-	now := time.Now()
-	var tasks []*Task
-	for _, tw := range mltw.timeWheels {
-		twTasks := tw.tick(now)
-		tasks = append(tasks, twTasks...)
-	}
-	return tasks
-}
 
 type entry struct {
 	SlotIndex int
 	Element   *list.Element
 }
 
-type TaskTimeWheel struct {
+type LevelTimeWheel struct {
 	tickDuration time.Duration
 	wheelSize    int
 	slots        []*list.List
-	preTickTime  time.Time
-
-	tasks map[string]entry
+	tasks        map[string]entry
+	currentSlot  int
+	lastTickTime time.Time
+	mu           sync.RWMutex
 }
 
-func newTaskTimeWheel(tickDuration time.Duration, wheelSize int) *TaskTimeWheel {
-	if tickDuration <= 0 {
-		tickDuration = MinTimeWheelDuration
-	}
-	if wheelSize <= 0 {
-		wheelSize = DefaultWheelSize
-	}
+type DynamicTimeWheel struct {
+	baseTickDuration time.Duration
+	levels           []*LevelTimeWheel
+	mu               sync.RWMutex
+}
 
-	slots := make([]*list.List, wheelSize)
-	for i := range wheelSize {
+func NewDynamicTimeWheel(baseTickDuration ...time.Duration) *DynamicTimeWheel {
+	tickDuration := BaseTickDuration
+	if len(baseTickDuration) > 0 {
+		tickDuration = baseTickDuration[0]
+	}
+	return &DynamicTimeWheel{
+		baseTickDuration: tickDuration,
+		levels:           []*LevelTimeWheel{newLevelTimeWheel(tickDuration, DefaultWheelSize)},
+	}
+}
+
+func newLevelTimeWheel(tick time.Duration, size int) *LevelTimeWheel {
+	slots := make([]*list.List, size)
+	for i := range slots {
 		slots[i] = list.New()
 	}
-
-	return &TaskTimeWheel{
-		tickDuration: tickDuration,
-		wheelSize:    wheelSize,
+	return &LevelTimeWheel{
+		tickDuration: tick,
+		wheelSize:    size,
 		slots:        slots,
-		preTickTime:  time.Now(),
 		tasks:        make(map[string]entry),
+		currentSlot:  0,
+		lastTickTime: time.Now(),
 	}
 }
 
-func (tw *TaskTimeWheel) taskExist(taskID string) bool {
-	_, exists := tw.tasks[taskID]
+func (dtw *DynamicTimeWheel) maxCoverage() time.Duration {
+	dtw.mu.RLock()
+	defer dtw.mu.RUnlock()
+
+	max := time.Duration(0)
+	for _, level := range dtw.levels {
+		max += level.tickDuration * time.Duration(level.wheelSize)
+	}
+	return max
+}
+
+func (dtw *DynamicTimeWheel) expandLevel() {
+	dtw.mu.Lock()
+	defer dtw.mu.Unlock()
+
+	lastLevel := dtw.levels[len(dtw.levels)-1]
+	newTick := lastLevel.tickDuration * time.Duration(lastLevel.wheelSize)
+	newLevel := newLevelTimeWheel(newTick, DefaultWheelSize)
+	dtw.levels = append(dtw.levels, newLevel)
+}
+
+func (dtw *DynamicTimeWheel) AddTask(task *Task) {
+	now := time.Now()
+	duration := max(task.NextRunTime.Sub(now), 0)
+
+	for dtw.maxCoverage() < duration {
+		dtw.expandLevel()
+	}
+
+	dtw.mu.Lock()
+	defer dtw.mu.Unlock()
+
+	for _, level := range dtw.levels {
+		levelCoverage := level.tickDuration * time.Duration(level.wheelSize)
+		if duration <= levelCoverage {
+			level.addTask(task, now)
+			return
+		}
+	}
+
+	dtw.levels[len(dtw.levels)-1].addTask(task, now)
+}
+
+func (dtw *DynamicTimeWheel) Tick() []*Task {
+	now := time.Now()
+	var readyTasks []*Task
+
+	dtw.mu.RLock()
+	defer dtw.mu.RUnlock()
+
+	for i := len(dtw.levels) - 1; i >= 0; i-- {
+		level := dtw.levels[i]
+		level.mu.Lock()
+
+		elapsed := now.Sub(level.lastTickTime)
+		ticks := int(elapsed / level.tickDuration)
+
+		if ticks > 0 {
+			level.lastTickTime = level.lastTickTime.Add(time.Duration(ticks) * level.tickDuration)
+			level.currentSlot = (level.currentSlot + ticks) % level.wheelSize
+
+			slot := level.slots[level.currentSlot]
+			if slot.Len() > 0 {
+				tasks := make([]*Task, 0, slot.Len())
+				for e := slot.Front(); e != nil; e = e.Next() {
+					task := e.Value.(*Task)
+					tasks = append(tasks, task)
+					delete(level.tasks, task.ID)
+				}
+				// Clear the slot
+				slot.Init()
+
+				if i == 0 {
+					readyTasks = append(readyTasks, tasks...)
+				} else {
+					level.mu.Unlock()
+					for _, task := range tasks {
+						dtw.levels[i-1].addTask(task, now)
+					}
+					continue
+				}
+			}
+		}
+		level.mu.Unlock()
+	}
+
+	return readyTasks
+}
+
+func (dtw *DynamicTimeWheel) TaskExist(taskID string) bool {
+	dtw.mu.RLock()
+	defer dtw.mu.RUnlock()
+
+	var exists bool
+	for _, level := range dtw.levels {
+		level.mu.RLock()
+		if _, ok := level.tasks[taskID]; ok {
+			exists = true
+		}
+		level.mu.RUnlock()
+		if exists {
+			break
+		}
+	}
 	return exists
 }
 
-func (tw *TaskTimeWheel) addTask(task *Task) {
-	nextRunTime := task.NextRunTime
-	slotIndex := int(nextRunTime.Sub(tw.preTickTime)/tw.tickDuration) % tw.wheelSize
+func (dtw *DynamicTimeWheel) RemoveTask(task *Task) {
+	dtw.mu.RLock()
+	defer dtw.mu.RUnlock()
 
-	// remove task if it already exists in the wheel
-	if _, exist := tw.tasks[task.ID]; exist {
-		tw.removeTask(task)
+	for _, level := range dtw.levels {
+		level.mu.Lock()
+		if _, exists := level.tasks[task.ID]; exists {
+			level.removeTask(task.ID)
+			level.mu.Unlock()
+			break
+		}
+		level.mu.Unlock()
+	}
+}
+
+func (dtw *DynamicTimeWheel) GetTasks() []*Task {
+	dtw.mu.RLock()
+	defer dtw.mu.RUnlock()
+
+	var tasks []*Task
+	for _, level := range dtw.levels {
+		level.mu.RLock()
+		for _, slot := range level.slots {
+			for e := slot.Front(); e != nil; e = e.Next() {
+				tasks = append(tasks, e.Value.(*Task))
+			}
+		}
+		level.mu.RUnlock()
+	}
+	return tasks
+}
+
+func (ltw *LevelTimeWheel) addTask(task *Task, now time.Time) {
+	ltw.mu.Lock()
+	defer ltw.mu.Unlock()
+
+	offset := max(task.NextRunTime.Sub(now), 0)
+	slotIndex := int(offset/ltw.tickDuration) % ltw.wheelSize
+
+	if _, exists := ltw.tasks[task.ID]; exists {
+		ltw.removeTask(task.ID)
 	}
 
-	e := tw.slots[slotIndex].PushBack(task)
-	tw.tasks[task.ID] = entry{
+	e := ltw.slots[slotIndex].PushBack(task)
+	ltw.tasks[task.ID] = entry{
 		SlotIndex: slotIndex,
 		Element:   e,
 	}
 }
 
-func (tw *TaskTimeWheel) removeTask(task *Task) {
-	entry, ok := tw.tasks[task.ID]
+func (ltw *LevelTimeWheel) removeTask(taskID string) {
+	entry, ok := ltw.tasks[taskID]
 	if !ok {
 		return
 	}
-	if entry.Element == nil {
-		return
-	}
-	tw.slots[entry.SlotIndex].Remove(entry.Element)
-	delete(tw.tasks, task.ID)
-}
-
-func (tw *TaskTimeWheel) tick(now time.Time) []*Task {
-	slotIndex := int(now.Sub(tw.preTickTime)/tw.tickDuration) % tw.wheelSize
-
-	if tw.slots[slotIndex].Len() == 0 {
-		return nil
-	}
-
-	tasks := make([]*Task, 0, tw.slots[slotIndex].Len())
-	for e := tw.slots[slotIndex].Front(); e != nil; e = e.Next() {
-		t := e.Value.(*Task)
-		if t.NextRunTime.After(now) {
-			continue
-		}
-		tasks = append(tasks, t)
-		tw.slots[slotIndex].Remove(e)
-		delete(tw.tasks, t.ID)
-	}
-
-	return tasks
+	ltw.slots[entry.SlotIndex].Remove(entry.Element)
+	delete(ltw.tasks, taskID)
 }
