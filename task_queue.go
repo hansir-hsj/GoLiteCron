@@ -2,10 +2,14 @@ package golitecron
 
 import (
 	"container/heap"
+	"sync"
 	"time"
 )
 
-type TaskQueue []*Task
+type TaskQueue struct {
+	tasks []*Task
+	mu    sync.RWMutex
+}
 
 func NewTaskQueue() *TaskQueue {
 	tq := &TaskQueue{}
@@ -13,34 +17,36 @@ func NewTaskQueue() *TaskQueue {
 	return tq
 }
 
-func (tq TaskQueue) Len() int {
-	return len(tq)
+func (tq *TaskQueue) Len() int {
+	return len(tq.tasks)
 }
 
-func (tq TaskQueue) Less(i, j int) bool {
-	return tq[i].NextRunTime.Before(tq[j].NextRunTime)
+func (tq *TaskQueue) Less(i, j int) bool {
+	return tq.tasks[i].NextRunTime.Before(tq.tasks[j].NextRunTime)
 }
 
-func (tq TaskQueue) Swap(i, j int) {
-	tq[i], tq[j] = tq[j], tq[i]
+func (tq *TaskQueue) Swap(i, j int) {
+	tq.tasks[i], tq.tasks[j] = tq.tasks[j], tq.tasks[i]
 }
 
 func (tq *TaskQueue) Push(task any) {
-	t := task.(*Task)
-	*tq = append(*tq, t)
+	tq.tasks = append(tq.tasks, task.(*Task))
 }
 
 func (tq *TaskQueue) Pop() any {
-	if len(*tq) == 0 {
+	if len(tq.tasks) == 0 {
 		return nil
 	}
-	task := (*tq)[len(*tq)-1]
-	*tq = (*tq)[:len(*tq)-1]
+	task := tq.tasks[len(tq.tasks)-1]
+	tq.tasks = tq.tasks[:len(tq.tasks)-1]
 	return task
 }
 
 func (tq *TaskQueue) TaskExist(taskID string) bool {
-	for _, task := range *tq {
+	tq.mu.RLock()
+	defer tq.mu.RUnlock()
+
+	for _, task := range tq.tasks {
 		if task.ID == taskID {
 			return true
 		}
@@ -49,19 +55,26 @@ func (tq *TaskQueue) TaskExist(taskID string) bool {
 }
 
 func (tq *TaskQueue) AddTask(task *Task) {
+	tq.mu.Lock()
+	defer tq.mu.Unlock()
+
 	heap.Push(tq, task)
 }
 
 func (tq *TaskQueue) GetTasks() []*Task {
-	tasks := make([]*Task, 0, tq.Len())
-	for _, task := range *tq {
-		tasks = append(tasks, task)
-	}
+	tq.mu.RLock()
+	defer tq.mu.RUnlock()
+
+	tasks := make([]*Task, len(tq.tasks))
+	copy(tasks, tq.tasks)
 	return tasks
 }
 
 func (tq *TaskQueue) RemoveTask(task *Task) {
-	for i, t := range *tq {
+	tq.mu.Lock()
+	defer tq.mu.Unlock()
+
+	for i, t := range tq.tasks {
 		if t.ID == task.ID {
 			heap.Remove(tq, i)
 			break
@@ -70,18 +83,26 @@ func (tq *TaskQueue) RemoveTask(task *Task) {
 }
 
 func (tq *TaskQueue) Tick() []*Task {
-	tasks := make([]*Task, 0, tq.Len())
+	tq.mu.Lock()
+	defer tq.mu.Unlock()
+
+	tasks := make([]*Task, 0)
 	now := time.Now()
 	if tq.Len() == 0 {
 		return nil
 	}
 
-	for _, t := range *tq {
+	toRemove := make([]int, 0)
+	for i, t := range tq.tasks {
 		if t.NextRunTime.After(now) {
 			continue
 		}
-		tq.RemoveTask(t)
 		tasks = append(tasks, t)
+		toRemove = append(toRemove, i)
+	}
+
+	for i := len(toRemove) - 1; i >= 0; i-- {
+		heap.Remove(tq, toRemove[i])
 	}
 
 	return tasks

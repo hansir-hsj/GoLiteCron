@@ -87,10 +87,11 @@ func (dtw *DynamicTimeWheel) AddTask(task *Task) {
 		dtw.expandLevel()
 	}
 
-	dtw.mu.Lock()
-	defer dtw.mu.Unlock()
+	dtw.mu.RLock()
+	levels := dtw.levels
+	dtw.mu.RUnlock()
 
-	for _, level := range dtw.levels {
+	for _, level := range levels {
 		levelCoverage := level.tickDuration * time.Duration(level.wheelSize)
 		if duration <= levelCoverage {
 			level.addTask(task, now)
@@ -106,9 +107,10 @@ func (dtw *DynamicTimeWheel) Tick() []*Task {
 	var readyTasks []*Task
 
 	dtw.mu.RLock()
-	defer dtw.mu.RUnlock()
+	levels := dtw.levels
+	dtw.mu.RUnlock()
 
-	for i := len(dtw.levels) - 1; i >= 0; i-- {
+	for i := len(levels) - 1; i >= 0; i-- {
 		level := dtw.levels[i]
 		level.mu.Lock()
 

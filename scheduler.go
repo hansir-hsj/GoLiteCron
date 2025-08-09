@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,10 +22,9 @@ const (
 
 type Scheduler struct {
 	taskStorage TaskStorage
-	mu          sync.RWMutex
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
-	running     bool
+	running     int32
 }
 
 func NewScheduler(storageType ...StorageType) *Scheduler {
@@ -47,16 +47,10 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 }
 
 func (s *Scheduler) GetTasks() []*Task {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	return s.taskStorage.GetTasks()
 }
 
 func (s *Scheduler) GetTaskInfo(taskID string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tasks := s.taskStorage.GetTasks()
 	for _, task := range tasks {
 		if task.ID == taskID {
@@ -68,9 +62,6 @@ func (s *Scheduler) GetTaskInfo(taskID string) string {
 }
 
 func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	id := job.ID()
 	if s.taskStorage.TaskExist(id) {
 		return fmt.Errorf("task with ID %s already exists", id)
@@ -95,9 +86,6 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 }
 
 func (s *Scheduler) RemoveTask(task *Task) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.taskStorage.TaskExist(task.ID) {
 		return false
 	}
@@ -108,26 +96,17 @@ func (s *Scheduler) RemoveTask(task *Task) bool {
 }
 
 func (s *Scheduler) Start() {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
 		return
 	}
-	s.running = true
-	s.mu.Unlock()
 	s.wg.Add(1)
 	go s.run()
 }
 
 func (s *Scheduler) Stop() {
-	s.mu.Lock()
-	if !s.running {
-		s.mu.Unlock()
+	if !atomic.CompareAndSwapInt32(&s.running, 1, 0) {
 		return
 	}
-	s.running = false
-	s.mu.Unlock()
-
 	close(s.stopChan)
 	s.wg.Wait()
 }
@@ -143,9 +122,7 @@ func (s *Scheduler) run() {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			s.mu.Lock()
 			tasksToExecute := s.taskStorage.Tick()
-			s.mu.Unlock()
 			if len(tasksToExecute) == 0 {
 				continue
 			}
@@ -161,13 +138,10 @@ func (s *Scheduler) run() {
 						}
 					}()
 
-					s.mu.Lock()
-					if t.Running {
-						s.mu.Unlock()
+					if !atomic.CompareAndSwapInt32(&t.Running, 0, 1) {
 						return
 					}
-					t.Running = true
-					s.mu.Unlock()
+					defer atomic.StoreInt32(&t.Running, 0)
 
 					// timeout control
 					var err error
@@ -202,12 +176,9 @@ func (s *Scheduler) run() {
 					// Convert the current time to the time zone of the task
 					nowInLocation := now.In(t.CronParser.location)
 
-					s.mu.Lock()
 					task.PreRunTime = nowInLocation
 					task.NextRunTime = task.CronParser.Next(nowInLocation)
-					task.Running = false
 					s.taskStorage.AddTask(task)
-					s.mu.Unlock()
 				}(task)
 			}
 		}

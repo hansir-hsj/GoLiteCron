@@ -11,5 +11,5 @@ type Task struct {
 	NextRunTime time.Time
 	PreRunTime  time.Time
 
-	Running bool
+	Running int32
 }
