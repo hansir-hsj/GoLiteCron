@@ -1,6 +1,6 @@
 # GoLiteCron
 
-[en](readme.md) [zh](readme.zh.md)
+[英文](readme.md)
 
 轻量化的Cron框架
 

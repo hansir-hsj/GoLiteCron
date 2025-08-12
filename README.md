@@ -1,6 +1,6 @@
 # GoLiteCron
 
-[en](readme.md) [zh](readme.zh.md)
+[Chinese](readme.zh.md)
 
 A lightweight Cron framework
 
