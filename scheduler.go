@@ -46,6 +46,47 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 }
 
+func (s *Scheduler) LoadTasksFromConfig(config *Config) error {
+	for _, taskConfig := range config.Tasks {
+		if taskConfig.ID == "" || taskConfig.CronExpr == "" || taskConfig.FuncName == "" {
+			return fmt.Errorf("task config is missing required fields: ID, CronExpr, or FuncName")
+		}
+
+		fn, ok := GetJob(taskConfig.FuncName)
+		if !ok {
+			return fmt.Errorf("job function %s not found", taskConfig.FuncName)
+		}
+
+		var opts []Option
+		if taskConfig.EnableSeconds {
+			opts = append(opts, WithSeconds())
+		}
+		if taskConfig.EnableYears {
+			opts = append(opts, WithYears())
+		}
+		if taskConfig.Timeout > 0 {
+			opts = append(opts, WithTimeout(time.Duration(taskConfig.Timeout)*time.Millisecond))
+		}
+		if taskConfig.Retry > 0 {
+			opts = append(opts, WithRetry(taskConfig.Retry))
+		}
+		if taskConfig.Location != "" {
+			loc, err := time.LoadLocation(taskConfig.Location)
+			if err != nil {
+				return fmt.Errorf("failed to load location %s: %w", taskConfig.Location, err)
+			}
+			opts = append(opts, WithLocation(loc))
+		}
+
+		job := WrapJob(taskConfig.ID, fn)
+		if err := s.AddTask(taskConfig.CronExpr, job, opts...); err != nil {
+			return fmt.Errorf("failed to add task %s: %w", taskConfig.ID, err)
+		}
+	}
+
+	return nil
+}
+
 func (s *Scheduler) GetTasks() []*Task {
 	return s.taskStorage.GetTasks()
 }
