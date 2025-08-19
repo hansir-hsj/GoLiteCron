@@ -24,6 +24,25 @@ go get -u github.com/GoLite/GoLiteCron
   - 样例: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
 - 支持任务重试次数
   - 样例: `scheduler.AddTask("@minutely", cron.WithRetry(1))`
+- 支持从配置文件加载任务
+  - 样例:
+  - cron.yaml
+    ```yaml
+    tasks:
+    - id: "daily-task"
+      cron_expr: "0 0 * * *"
+      timeout: 30000
+      retry: 2
+      location: "Asia/Shanghai"
+      func_name: "dailyJob"
+    ```
+  - register the job
+    ```go
+    golitecron.RegisterJob("dailyJob", func() error {
+      fmt.Println("execute daily job")
+		  return nil
+  	})
+    ```
   
 
 ### 使用方法

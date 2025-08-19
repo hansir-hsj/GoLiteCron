@@ -24,6 +24,26 @@ go get -u github.com/GoLite/GoLiteCron
   - Example: `scheduler.AddTask("@minutely", cron.WithTimeout(10*time.Second))`
 - Support task retry
   - Example: `scheduler.AddTask("@minutely", cron.WithRetry(3))`
+- Support Loading tasks from file
+  - Example:
+  - cron.yaml
+    ```yaml
+    tasks:
+    - id: "daily-task"
+      cron_expr: "0 0 * * *"
+      timeout: 30000
+      retry: 2
+      location: "Asia/Shanghai"
+      func_name: "dailyJob"
+    ```
+  - register the job
+    ```go
+    golitecron.RegisterJob("dailyJob", func() error {
+      fmt.Println("execute daily job")
+		  return nil
+  	})
+    ```
+    
 
 ### Usage
 ```go
