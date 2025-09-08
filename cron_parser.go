@@ -23,7 +23,7 @@ type parseRule struct {
 	field     FieldType
 	min       int
 	max       int
-	parseFunc func(string, int, int) (map[int]struct{}, error)
+	parseFunc func(string, int, int, FieldType) (map[int]struct{}, error)
 }
 
 type CronParser struct {
@@ -132,7 +132,7 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 	parsed := make(map[FieldType]map[int]struct{}, len(parts))
 	for i, part := range parts {
 		rule := rules[i]
-		vals, err := rule.parseFunc(part, rule.min, rule.max)
+		vals, err := rule.parseFunc(part, rule.min, rule.max, rule.field)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing field %d (%s): %v", i, part, err)
 		}
@@ -161,7 +161,7 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 	return parser, nil
 }
 
-func parseField(field string, min, max int) (map[int]struct{}, error) {
+func parseField(field string, min, max int, fieldType FieldType) (map[int]struct{}, error) {
 	if field == "*" || field == "?" {
 		result := make(map[int]struct{}, max-min+1)
 		for i := min; i <= max; i++ {
@@ -174,7 +174,7 @@ func parseField(field string, min, max int) (map[int]struct{}, error) {
 		parts := strings.Split(field, ",")
 		result := make(map[int]struct{})
 		for _, part := range parts {
-			nums, err := parseField(part, min, max)
+			nums, err := parseField(part, min, max, fieldType)
 			if err != nil {
 				return nil, err
 			}
@@ -237,6 +237,50 @@ func parseField(field string, min, max int) (map[int]struct{}, error) {
 		return result, nil
 	}
 
+	if strings.Contains(field, "L") {
+		if len(field) > 1 && strings.HasSuffix(field, "L") {
+			return nil, fmt.Errorf("invalid 'L' format: %s", field)
+		}
+		if len(field) > 1 {
+			numStr := field[:len(field)-1]
+			num, err := strconv.Atoi(numStr)
+			if err != nil || num < min || num > max {
+				return nil, fmt.Errorf("invalid 'L' number: %s", numStr)
+			}
+			// For DayOfWeek, 'L' means the last occurrence of the day in the month
+			// We represent it as negative to differentiate from normal days
+			// e.g., 5L means the last Friday of the month
+			// This requires special handling in the scheduling logic
+			// Here we just return the negative value to indicate this
+			// The actual calculation will be done in the Next function
+			if fieldType == DayOfWeek {
+				return map[int]struct{}{-num: {}}, nil
+			}
+		}
+		if fieldType == DayOfMonth {
+			// -1 indicates the last day of the month
+			return map[int]struct{}{-1: {}}, nil
+		}
+		return nil, fmt.Errorf("expression L not allowed in this field: %s", field)
+	}
+
+	if strings.Contains(field, "W") {
+		if fieldType != DayOfMonth {
+			return nil, fmt.Errorf("expression W only allowed in DayOfMonth field: %s", field)
+		}
+		if !strings.HasSuffix(field, "W") || len(field) < 2 {
+			return nil, fmt.Errorf("invalid 'W' format: %s", field)
+		}
+		numStr := field[:len(field)-1]
+		num, err := strconv.Atoi(numStr)
+		if err != nil || num < min || num > max {
+			return nil, fmt.Errorf("invalid 'W' number: %s", numStr)
+		}
+		// 'W' means the nearest weekday (Monday to Friday) to the given day of the month
+		// We represent it as Zero to indicate this special case
+		return map[int]struct{}{0: {}}, nil
+	}
+
 	num, err := strconv.Atoi(field)
 	if err != nil || num < min || num > max {
 		return nil, fmt.Errorf("invalid number: %s", field)
@@ -257,13 +301,56 @@ func (p *CronParser) Next(t time.Time) time.Time {
 
 	for {
 		next = next.Add(time.Second)
-		if contains(p.seconds, next.Second()) &&
-			(!p.enableYears || contains(p.years, next.Year())) &&
-			contains(p.minutes, next.Minute()) &&
-			contains(p.hours, next.Hour()) &&
-			contains(p.dayOfWeek, int(next.Weekday())) &&
-			contains(p.months, int(next.Month())) &&
-			contains(p.dayOfMonth, next.Day()) {
+		year := next.Year()
+		month := next.Month()
+		day := next.Day()
+		hour := next.Hour()
+		minute := next.Minute()
+		second := next.Second()
+		weekday := int(next.Weekday())
+
+		var dayOfMonthValid bool
+		for d := range p.dayOfMonth {
+			if d == 0 {
+				lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, next.Location()).Day()
+				if day == lastDay {
+					dayOfMonthValid = true
+					break
+				}
+			} else if d < 0 {
+				targetDay := -d
+				nearestWeekday := findNearestWeekday(year, month, targetDay, next.Location())
+				if day == nearestWeekday {
+					dayOfMonthValid = true
+					break
+				}
+			} else if day == d {
+				dayOfMonthValid = true
+				break
+			}
+		}
+
+		var dayOfWeekValid bool
+		for w := range p.dayOfWeek {
+			if w < 0 {
+				targetWeekday := -w
+				lastWeekday := findLastWeekdayOfMonth(year, month, targetWeekday, next.Location())
+				if day == lastWeekday {
+					dayOfWeekValid = true
+					break
+				}
+			} else if weekday == w {
+				dayOfWeekValid = true
+				break
+			}
+		}
+
+		if dayOfMonthValid && dayOfWeekValid &&
+			contains(p.seconds, second) &&
+			(!p.enableYears || contains(p.years, year)) &&
+			contains(p.minutes, minute) &&
+			contains(p.hours, hour) &&
+			contains(p.months, int(month)) {
 			return next
 		}
 	}
@@ -272,4 +359,52 @@ func (p *CronParser) Next(t time.Time) time.Time {
 func contains(m map[int]struct{}, value int) bool {
 	_, exists := m[value]
 	return exists
+}
+
+// findNearestWeekday finds the nearest weekday (Monday to Friday) to the target day in the given month and year.
+// If the target day is a Saturday, it returns the previous Friday (if possible) or the next Monday.
+// If the target day is a Sunday, it returns the next Monday (if possible) or the previous Friday.
+// If the target day is a weekday, it returns the target day itself.
+// If the target day is out of range for the month, it returns -1.
+func findNearestWeekday(year int, month time.Month, targetDay int, loc *time.Location) int {
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+	if targetDay < 1 || targetDay > lastDay {
+		return -1
+	}
+
+	t := time.Date(year, month, targetDay, 0, 0, 0, 0, loc)
+	wd := t.Weekday()
+
+	if wd >= time.Monday && wd <= time.Friday {
+		return targetDay
+	}
+
+	if wd == time.Saturday {
+		if targetDay-1 >= 1 {
+			return targetDay - 1
+		}
+		return targetDay + 2
+	}
+
+	if wd == time.Sunday {
+		if targetDay+1 <= lastDay {
+			return targetDay + 1
+		}
+		return targetDay - 2
+	}
+
+	return targetDay
+}
+
+// findLastWeekdayOfMonth finds the last occurrence of the target weekday (0=Sunday, 1=Monday, ..., 6=Saturday)
+// in the given month and year. If not found, it returns -1.
+func findLastWeekdayOfMonth(year int, month time.Month, targetWeekday int, loc *time.Location) int {
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+	for day := lastDay; day >= 1; day-- {
+		t := time.Date(year, month, day, 0, 0, 0, 0, loc)
+		if int(t.Weekday()) == targetWeekday {
+			return day
+		}
+	}
+	return -1
 }
