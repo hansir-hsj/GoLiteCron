@@ -238,7 +238,7 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 	}
 
 	if strings.Contains(field, "L") {
-		if len(field) > 1 && strings.HasSuffix(field, "L") {
+		if len(field) > 1 && !strings.HasSuffix(field, "L") {
 			return nil, fmt.Errorf("invalid 'L' format: %s", field)
 		}
 		if len(field) > 1 {
@@ -258,8 +258,8 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 			}
 		}
 		if fieldType == DayOfMonth {
-			// -1 indicates the last day of the month
-			return map[int]struct{}{-1: {}}, nil
+			// 0 indicates the last day of the month
+			return map[int]struct{}{0: {}}, nil
 		}
 		return nil, fmt.Errorf("expression L not allowed in this field: %s", field)
 	}
@@ -277,8 +277,8 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 			return nil, fmt.Errorf("invalid 'W' number: %s", numStr)
 		}
 		// 'W' means the nearest weekday (Monday to Friday) to the given day of the month
-		// We represent it as Zero to indicate this special case
-		return map[int]struct{}{0: {}}, nil
+		// -num indicates the nearest weekday
+		return map[int]struct{}{-num: {}}, nil
 	}
 
 	num, err := strconv.Atoi(field)
