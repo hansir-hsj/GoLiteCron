@@ -142,6 +142,37 @@ func (dtw *DynamicTimeWheel) Tick() []*Task {
 					continue
 				}
 			}
+		} else {
+			// Even if there is no complete tick to proceed, check the tasks that have expired in the current slot
+			slot := level.slots[level.currentSlot]
+			if slot.Len() > 0 {
+				var tasks []*Task
+				var removeEls []*list.Element
+				for e := slot.Front(); e != nil; e = e.Next() {
+					task := e.Value.(*Task)
+					// If the task is due (NextRunTime <= now), collect and remove it from the slot
+					if !task.NextRunTime.After(now) {
+						tasks = append(tasks, task)
+						removeEls = append(removeEls, e)
+						delete(level.tasks, task.ID)
+					}
+				}
+				for _, el := range removeEls {
+					slot.Remove(el)
+				}
+
+				if len(tasks) > 0 {
+					if i == 0 {
+						readyTasks = append(readyTasks, tasks...)
+					} else {
+						level.mu.Unlock()
+						for _, task := range tasks {
+							dtw.levels[i-1].addTask(task, now)
+						}
+						continue
+					}
+				}
+			}
 		}
 		level.mu.Unlock()
 	}
