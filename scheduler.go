@@ -133,7 +133,7 @@ func (s *Scheduler) RemoveTask(task *Task) bool {
 
 	s.taskStorage.RemoveTask(task)
 
-	return false
+	return true
 }
 
 func (s *Scheduler) Start() {
@@ -191,7 +191,6 @@ func (s *Scheduler) run() {
 					for i := 0; i < t.CronParser.retry+1; i++ {
 						if timeout > 0 {
 							ctx, cancel := context.WithTimeout(context.Background(), timeout)
-							defer cancel()
 
 							done := make(chan error, 1)
 							go func() {
@@ -200,8 +199,10 @@ func (s *Scheduler) run() {
 
 							select {
 							case err = <-done:
+								cancel()
 							case <-ctx.Done():
 								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
+								cancel()
 							}
 						} else {
 							err = t.Job.Execute()
@@ -216,10 +217,16 @@ func (s *Scheduler) run() {
 
 					// Convert the current time to the time zone of the task
 					nowInLocation := now.In(t.CronParser.location)
+					nextRunTime := task.CronParser.Next(nowInLocation)
 
-					task.PreRunTime = nowInLocation
-					task.NextRunTime = task.CronParser.Next(nowInLocation)
-					s.taskStorage.AddTask(task)
+					s.taskStorage.AddTask(&Task{
+						ID:          task.ID,
+						Job:         task.Job,
+						CronParser:  task.CronParser,
+						NextRunTime: nextRunTime,
+						PreRunTime:  nowInLocation,
+						Running:     0,
+					})
 				}(task)
 			}
 		}
