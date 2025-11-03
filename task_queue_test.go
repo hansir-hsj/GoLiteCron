@@ -23,7 +23,7 @@ func hasTask(tasks []*Task, id string) bool {
 }
 
 func TestNewTaskQueue_AddAndExist(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tq := NewTaskQueue()
 
 	if tq.Len() != 0 {
@@ -47,7 +47,7 @@ func TestNewTaskQueue_AddAndExist(t *testing.T) {
 }
 
 func TestGetTasks_IsCopyOfSlice(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tq := NewTaskQueue()
 
 	t1 := makeTask(now, "a", -time.Minute)
@@ -73,7 +73,7 @@ func TestGetTasks_IsCopyOfSlice(t *testing.T) {
 }
 
 func TestRemoveTask(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tq := NewTaskQueue()
 
 	t1 := makeTask(now, "r1", -time.Minute)
@@ -96,7 +96,7 @@ func TestRemoveTask(t *testing.T) {
 }
 
 func TestTick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tq := NewTaskQueue()
 
 	past1 := makeTask(now, "past1", -2*time.Second)
@@ -107,7 +107,7 @@ func TestTick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
 	tq.AddTask(past2)
 	tq.AddTask(future)
 
-	due := tq.Tick()
+	due := tq.Tick(now)
 	if len(due) == 0 {
 		t.Fatalf("expected at least one due task, got 0")
 	}

@@ -82,27 +82,23 @@ func (tq *TaskQueue) RemoveTask(task *Task) {
 	}
 }
 
-func (tq *TaskQueue) Tick() []*Task {
+func (tq *TaskQueue) Tick(now time.Time) []*Task {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
 
-	tasks := make([]*Task, 0)
-	now := time.Now()
 	if tq.Len() == 0 {
 		return nil
 	}
 
-	toRemove := make([]int, 0)
-	for i, t := range tq.tasks {
-		if t.NextRunTime.After(now) {
-			continue
-		}
-		tasks = append(tasks, t)
-		toRemove = append(toRemove, i)
-	}
+	nowUTC := now.UTC()
+	tasks := make([]*Task, 0)
 
-	for i := len(toRemove) - 1; i >= 0; i-- {
-		heap.Remove(tq, toRemove[i])
+	for tq.Len() > 0 {
+		top := tq.tasks[0]
+		if top.NextRunTime.UTC().After(nowUTC) {
+			break
+		}
+		tasks = append(tasks, heap.Pop(tq).(*Task))
 	}
 
 	return tasks

@@ -54,7 +54,7 @@ func newLevelTimeWheel(tick time.Duration, size int) *LevelTimeWheel {
 		slots:        slots,
 		tasks:        make(map[string]entry),
 		currentSlot:  0,
-		lastTickTime: time.Now(),
+		lastTickTime: time.Now().UTC(),
 	}
 }
 
@@ -80,8 +80,8 @@ func (dtw *DynamicTimeWheel) expandLevel() {
 }
 
 func (dtw *DynamicTimeWheel) AddTask(task *Task) {
-	now := time.Now()
-	duration := max(task.NextRunTime.Sub(now), 0)
+	now := time.Now().UTC()
+	duration := max(task.NextRunTime.UTC().Sub(now), 0)
 
 	for dtw.maxCoverage() < duration {
 		dtw.expandLevel()
@@ -102,19 +102,25 @@ func (dtw *DynamicTimeWheel) AddTask(task *Task) {
 	dtw.levels[len(dtw.levels)-1].addTask(task, now)
 }
 
-func (dtw *DynamicTimeWheel) Tick() []*Task {
-	now := time.Now()
+func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
+	nowUTC := now.UTC()
 	var readyTasks []*Task
 
 	dtw.mu.RLock()
-	levels := dtw.levels
+	levelCnt := len(dtw.levels)
 	dtw.mu.RUnlock()
 
-	for i := len(levels) - 1; i >= 0; i-- {
+	for i := levelCnt - 1; i >= 0; i-- {
+		var tasksToMove []*Task
+
+		// step 1: collect tasks to move
+		dtw.mu.RLock()
 		level := dtw.levels[i]
+		dtw.mu.RUnlock()
+
 		level.mu.Lock()
 
-		elapsed := now.Sub(level.lastTickTime)
+		elapsed := nowUTC.Sub(level.lastTickTime)
 		ticks := int(elapsed / level.tickDuration)
 
 		if ticks > 0 {
@@ -122,58 +128,45 @@ func (dtw *DynamicTimeWheel) Tick() []*Task {
 			level.currentSlot = (level.currentSlot + ticks) % level.wheelSize
 
 			slot := level.slots[level.currentSlot]
-			if slot.Len() > 0 {
-				tasks := make([]*Task, 0, slot.Len())
-				for e := slot.Front(); e != nil; e = e.Next() {
-					task := e.Value.(*Task)
-					tasks = append(tasks, task)
-					delete(level.tasks, task.ID)
-				}
-				// Clear the slot
-				slot.Init()
-
-				if i == 0 {
-					readyTasks = append(readyTasks, tasks...)
-				} else {
-					level.mu.Unlock()
-					for _, task := range tasks {
-						dtw.levels[i-1].addTask(task, now)
-					}
-					continue
-				}
+			for e := slot.Front(); e != nil; e = e.Next() {
+				task := e.Value.(*Task)
+				tasksToMove = append(tasksToMove, task)
+				delete(level.tasks, task.ID)
 			}
+			// Clear the slot
+			slot.Init()
 		} else {
 			// Even if there is no complete tick to proceed, check the tasks that have expired in the current slot
 			slot := level.slots[level.currentSlot]
-			if slot.Len() > 0 {
-				var tasks []*Task
-				var removeEls []*list.Element
-				for e := slot.Front(); e != nil; e = e.Next() {
-					task := e.Value.(*Task)
-					// If the task is due (NextRunTime <= now), collect and remove it from the slot
-					if !task.NextRunTime.After(now) {
-						tasks = append(tasks, task)
-						removeEls = append(removeEls, e)
-						delete(level.tasks, task.ID)
-					}
+			var removeEls []*list.Element
+			for e := slot.Front(); e != nil; e = e.Next() {
+				task := e.Value.(*Task)
+				if !task.NextRunTime.UTC().After(nowUTC) {
+					tasksToMove = append(tasksToMove, task)
+					removeEls = append(removeEls, e)
+					delete(level.tasks, task.ID)
 				}
-				for _, el := range removeEls {
-					slot.Remove(el)
-				}
+			}
+			for _, el := range removeEls {
+				slot.Remove(el)
+			}
+		}
 
-				if len(tasks) > 0 {
-					if i == 0 {
-						readyTasks = append(readyTasks, tasks...)
-					} else {
-						level.mu.Unlock()
-						for _, task := range tasks {
-							dtw.levels[i-1].addTask(task, now)
-						}
-						continue
-					}
+		// step 2: move tasks
+		if len(tasksToMove) > 0 {
+			if i == 0 {
+				readyTasks = append(readyTasks, tasksToMove...)
+			} else {
+				dtw.mu.RLock()
+				lowerLevel := dtw.levels[i-1]
+				dtw.mu.RUnlock()
+
+				for _, task := range tasksToMove {
+					lowerLevel.addTask(task, nowUTC)
 				}
 			}
 		}
+
 		level.mu.Unlock()
 	}
 
@@ -234,7 +227,9 @@ func (ltw *LevelTimeWheel) addTask(task *Task, now time.Time) {
 	ltw.mu.Lock()
 	defer ltw.mu.Unlock()
 
-	offset := max(task.NextRunTime.Sub(now), 0)
+	nowUTC := now.UTC()
+	taskTimeUTC := task.NextRunTime.UTC()
+	offset := max(taskTimeUTC.Sub(nowUTC), 0)
 	slotIndex := int(offset/ltw.tickDuration) % ltw.wheelSize
 
 	if _, exists := ltw.tasks[task.ID]; exists {

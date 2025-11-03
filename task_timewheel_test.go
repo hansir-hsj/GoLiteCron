@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewDynamicTimeWheel_AddAndExist(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tw := NewDynamicTimeWheel()
 
 	if tw == nil {
@@ -34,7 +34,7 @@ func TestNewDynamicTimeWheel_AddAndExist(t *testing.T) {
 }
 
 func TestTimeWheel_Tick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tw := NewDynamicTimeWheel()
 
 	past1 := makeTask(now, "past1", -2*time.Second)
@@ -45,7 +45,7 @@ func TestTimeWheel_Tick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
 	tw.AddTask(past2)
 	tw.AddTask(future)
 
-	due := tw.Tick()
+	due := tw.Tick(time.Now().UTC())
 	if len(due) == 0 {
 		t.Fatalf("expected due tasks from Tick, got 0")
 	}
@@ -67,7 +67,7 @@ func TestTimeWheel_Tick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
 }
 
 func TestTimeWheel_RemoveTaskAndGetTasksCopy(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	tw := NewDynamicTimeWheel()
 
 	a := makeTask(now, "a", -time.Minute)

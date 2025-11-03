@@ -95,7 +95,8 @@ func (s *Scheduler) GetTaskInfo(taskID string) string {
 	tasks := s.taskStorage.GetTasks()
 	for _, task := range tasks {
 		if task.ID == taskID {
-			return fmt.Sprintf("Task ID: %s, Next Run Time: %s", task.ID, task.NextRunTime.Format(time.RFC3339))
+			return fmt.Sprintf("Task ID: %s, Pre Run Time: %s, Next Run Time: %s",
+				task.ID, task.PreRunTime.Format(time.RFC3339), task.NextRunTime.Format(time.RFC3339))
 		}
 	}
 
@@ -113,13 +114,16 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 		return fmt.Errorf("failed to parse cron expression: %w", err)
 	}
 
-	now := time.Now()
+	nowUTC := time.Now().UTC()
+	nowInTaskZone := nowUTC.In(parser.location)
+	nextRunTime := parser.Next(nowInTaskZone)
+
 	task := &Task{
 		ID:          id,
 		Job:         job,
 		CronParser:  parser,
-		NextRunTime: parser.Next(now),
-		PreRunTime:  now,
+		NextRunTime: nextRunTime,
+		PreRunTime:  nowInTaskZone,
 	}
 	s.taskStorage.AddTask(task)
 
@@ -163,12 +167,12 @@ func (s *Scheduler) run() {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			tasksToExecute := s.taskStorage.Tick()
+			nowUTC := time.Now().UTC()
+			tasksToExecute := s.taskStorage.Tick(nowUTC)
 			if len(tasksToExecute) == 0 {
 				continue
 			}
 
-			now := time.Now()
 			for _, task := range tasksToExecute {
 				s.wg.Add(1)
 				go func(t *Task) {
@@ -216,17 +220,20 @@ func (s *Scheduler) run() {
 					}
 
 					// Convert the current time to the time zone of the task
-					nowInLocation := now.In(t.CronParser.location)
-					nextRunTime := task.CronParser.Next(nowInLocation)
+					nowUTC := time.Now().UTC()
+					nowInTaskZone := nowUTC.In(t.CronParser.location)
+					nextRunTime := task.CronParser.Next(nowInTaskZone)
 
-					s.taskStorage.AddTask(&Task{
+					updateTask := &Task{
 						ID:          task.ID,
 						Job:         task.Job,
 						CronParser:  task.CronParser,
 						NextRunTime: nextRunTime,
-						PreRunTime:  nowInLocation,
+						PreRunTime:  nowInTaskZone,
 						Running:     0,
-					})
+					}
+
+					s.taskStorage.AddTask(updateTask)
 				}(task)
 			}
 		}
