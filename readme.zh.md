@@ -1,6 +1,7 @@
 # GoLiteCron
 
 [英文](readme.md)
+[链式调用api](readme_chain_api_zh.md)
 
 ## 概述
 GoLiteCron 是一个轻量级、高性能的 cron 任务调度框架，适用于 Go 应用程序。它提供了简单而强大的接口来管理定时任务，支持各种 cron 表达式、时区、任务超时和重试功能。该框架提供了灵活的存储选项（TimeWheel 和 Heap），以适应不同的应用场景。

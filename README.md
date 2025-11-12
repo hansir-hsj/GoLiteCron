@@ -1,6 +1,7 @@
 # GoLiteCron
 
 [Chinese](readme.zh.md)
+[chain api](readme_chain_api.md)
 
 ## Overview
 GoLiteCron is a lightweight, high-performance cron job scheduling framework for Go applications. It provides a simple yet powerful interface for managing scheduled tasks with support for various cron expressions, time zones, task timeouts, and retries. The framework offers flexible storage options (TimeWheel and Heap) to suit different application scenarios.
