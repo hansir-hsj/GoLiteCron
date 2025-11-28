@@ -1,5 +1,7 @@
 # GoLiteCron 链式API文档
 
+[English Documentation](chain_usage.md) | [使用指南](usage.zh.md) | [主页](readme.zh.md)
+
 ## 概述
 
 为了提供更友好的用户体验，GoLiteCron新增了类似Python schedule库的链式API，让你可以用更自然的语言来定义调度任务。
@@ -63,12 +65,12 @@ scheduler.Every().Day().At("10:30:15").Do(job)
 ```go
 // 1. 无返回值函数
 scheduler.Every(10).Seconds().Do(func() {
-    fmt.Println("Simple task")
+    fmt.Println("简单任务")
 })
 
 // 2. 带错误返回值的函数
 scheduler.Every().Hour().Do(func() error {
-    fmt.Println("Task with error handling")
+    fmt.Println("带错误处理的任务")
     return nil
 })
 
@@ -142,18 +144,18 @@ func main() {
     
     // 每10秒执行
     scheduler.Every(10).Seconds().Do(func() {
-        fmt.Println("Task runs every 10 seconds")
+        fmt.Println("每10秒运行一次任务")
     })
     
     // 每天上午10:30执行
     scheduler.Every().Day().At("10:30").Do(func() error {
-        fmt.Println("Daily morning task")
+        fmt.Println("每日早晨任务")
         return nil
     })
     
     // 每周一执行
     scheduler.Every().Monday().Do(func() {
-        fmt.Println("Monday task")
+        fmt.Println("周一任务")
     })
     
     scheduler.Start()
@@ -186,19 +188,19 @@ func main() {
         WithRetry(3).
         WithLocation(shanghaiLoc).
         Do(func() error {
-            fmt.Println("Shanghai morning task with timeout and retry")
+            fmt.Println("上海早晨任务，带超时和重试")
             return nil
         }, "shanghai-morning")
     
     if err != nil {
-        fmt.Printf("Error: %v\n", err)
+        fmt.Printf("错误: %v\n", err)
         return
     }
     
     // 复杂的业务逻辑任务
     scheduler.Every(2).Hours().Do(func() error {
         // 执行数据同步
-        fmt.Println("Data sync task running...")
+        fmt.Println("数据同步任务运行中...")
         time.Sleep(5 * time.Second) // 模拟耗时操作
         return nil
     }, "data-sync")
@@ -208,9 +210,9 @@ func main() {
     
     // 显示所有任务
     tasks := scheduler.GetTasks()
-    fmt.Println("Scheduled tasks:")
+    fmt.Println("已调度的任务:")
     for _, task := range tasks {
-        fmt.Printf("- %s: next run at %s\n", 
+        fmt.Printf("- %s: 下次运行于 %s\n", 
             task.ID, task.NextRunTime.Format("2006-01-02 15:04:05"))
     }
     

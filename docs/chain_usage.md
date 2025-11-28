@@ -1,5 +1,7 @@
 # GoLiteCron Chain API Documentation
 
+[中文文档](chain_usage_zh.md) | [使用指南](usage.md) | [主页](../readme.md)
+
 ## Overview
 
 To provide a more user-friendly experience, GoLiteCron has added a chain API similar to Python's schedule library, allowing you to define scheduled tasks using more natural language.
