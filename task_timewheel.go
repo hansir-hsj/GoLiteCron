@@ -2,6 +2,7 @@ package golitecron
 
 import (
 	"container/list"
+	"math"
 	"sync"
 	"time"
 )
@@ -94,12 +95,11 @@ func (dtw *DynamicTimeWheel) AddTask(task *Task) {
 	for _, level := range levels {
 		levelCoverage := level.tickDuration * time.Duration(level.wheelSize)
 		if duration <= levelCoverage {
-			level.addTask(task, now)
+			level.addTask(task)
 			return
 		}
 	}
 
-	dtw.levels[len(dtw.levels)-1].addTask(task, now)
 }
 
 func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
@@ -162,7 +162,7 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 				dtw.mu.RUnlock()
 
 				for _, task := range tasksToMove {
-					lowerLevel.addTask(task, nowUTC)
+					lowerLevel.addTask(task)
 				}
 			}
 		}
@@ -223,14 +223,15 @@ func (dtw *DynamicTimeWheel) GetTasks() []*Task {
 	return tasks
 }
 
-func (ltw *LevelTimeWheel) addTask(task *Task, now time.Time) {
+func (ltw *LevelTimeWheel) addTask(task *Task) {
 	ltw.mu.Lock()
 	defer ltw.mu.Unlock()
 
-	nowUTC := now.UTC()
 	taskTimeUTC := task.NextRunTime.UTC()
-	offset := max(taskTimeUTC.Sub(nowUTC), 0)
-	slotIndex := int(offset/ltw.tickDuration) % ltw.wheelSize
+	offset := max(taskTimeUTC.Sub(ltw.lastTickTime), 0)
+
+	ticks := int(math.Ceil(float64(offset) / float64(ltw.tickDuration)))
+	slotIndex := (ltw.currentSlot + ticks) % ltw.wheelSize
 
 	if _, exists := ltw.tasks[task.ID]; exists {
 		ltw.removeTask(task.ID)
