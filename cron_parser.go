@@ -290,7 +290,7 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 }
 
 func (p *CronParser) normalization() {
-	if len(p.seconds) == 0 {
+	if p.enableSeconds && len(p.seconds) == 0 {
 		p.seconds = map[int]struct{}{0: {}}
 	}
 }
@@ -300,7 +300,11 @@ func (p *CronParser) Next(t time.Time) time.Time {
 	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
 	for {
-		next = next.Add(time.Second)
+		if p.enableSeconds {
+			next = next.Add(time.Second).Truncate(time.Second)
+		} else {
+			next = next.Add(time.Minute).Truncate(time.Minute)
+		}
 		year := next.Year()
 		month := next.Month()
 		day := next.Day()
@@ -308,6 +312,8 @@ func (p *CronParser) Next(t time.Time) time.Time {
 		minute := next.Minute()
 		second := next.Second()
 		weekday := int(next.Weekday())
+
+		secondValid := !p.enableSeconds || len(p.seconds) == 0 || contains(p.seconds, second)
 
 		var dayOfMonthValid bool
 		for d := range p.dayOfMonth {
@@ -345,8 +351,7 @@ func (p *CronParser) Next(t time.Time) time.Time {
 			}
 		}
 
-		if dayOfMonthValid && dayOfWeekValid &&
-			contains(p.seconds, second) &&
+		if dayOfMonthValid && dayOfWeekValid && secondValid &&
 			(!p.enableYears || contains(p.years, year)) &&
 			contains(p.minutes, minute) &&
 			contains(p.hours, hour) &&

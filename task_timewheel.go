@@ -2,7 +2,6 @@ package golitecron
 
 import (
 	"container/list"
-	"math"
 	"sync"
 	"time"
 )
@@ -123,6 +122,22 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 		elapsed := nowUTC.Sub(level.lastTickTime)
 		ticks := int(elapsed / level.tickDuration)
 
+		// Always check for expired tasks in the current slot first
+		slot := level.slots[level.currentSlot]
+		var removeEls []*list.Element
+		for e := slot.Front(); e != nil; e = e.Next() {
+			task := e.Value.(*Task)
+			if !task.NextRunTime.UTC().After(nowUTC) {
+				tasksToMove = append(tasksToMove, task)
+				removeEls = append(removeEls, e)
+				delete(level.tasks, task.ID)
+			}
+		}
+		for _, el := range removeEls {
+			slot.Remove(el)
+		}
+
+		// Then process ticks if any
 		if ticks > 0 {
 			level.lastTickTime = level.lastTickTime.Add(time.Duration(ticks) * level.tickDuration)
 			level.currentSlot = (level.currentSlot + ticks) % level.wheelSize
@@ -135,21 +150,6 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 			}
 			// Clear the slot
 			slot.Init()
-		} else {
-			// Even if there is no complete tick to proceed, check the tasks that have expired in the current slot
-			slot := level.slots[level.currentSlot]
-			var removeEls []*list.Element
-			for e := slot.Front(); e != nil; e = e.Next() {
-				task := e.Value.(*Task)
-				if !task.NextRunTime.UTC().After(nowUTC) {
-					tasksToMove = append(tasksToMove, task)
-					removeEls = append(removeEls, e)
-					delete(level.tasks, task.ID)
-				}
-			}
-			for _, el := range removeEls {
-				slot.Remove(el)
-			}
 		}
 
 		// step 2: move tasks
@@ -230,7 +230,7 @@ func (ltw *LevelTimeWheel) addTask(task *Task) {
 	taskTimeUTC := task.NextRunTime.UTC()
 	offset := max(taskTimeUTC.Sub(ltw.lastTickTime), 0)
 
-	ticks := int(math.Ceil(float64(offset) / float64(ltw.tickDuration)))
+	ticks := int((offset + ltw.tickDuration - 1) / ltw.tickDuration)
 	slotIndex := (ltw.currentSlot + ticks) % ltw.wheelSize
 
 	if _, exists := ltw.tasks[task.ID]; exists {
