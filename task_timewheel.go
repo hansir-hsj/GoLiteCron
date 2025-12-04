@@ -110,67 +110,131 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 	dtw.mu.RUnlock()
 
 	for i := levelCnt - 1; i >= 0; i-- {
-		var tasksToMove []*Task
-
-		// step 1: collect tasks to move
 		dtw.mu.RLock()
 		level := dtw.levels[i]
 		dtw.mu.RUnlock()
 
 		level.mu.Lock()
 
+		// Calculate ticks and update time/slot
 		elapsed := nowUTC.Sub(level.lastTickTime)
 		ticks := int(elapsed / level.tickDuration)
 
-		// Always check for expired tasks in the current slot first
-		slot := level.slots[level.currentSlot]
-		var removeEls []*list.Element
-		for e := slot.Front(); e != nil; e = e.Next() {
-			task := e.Value.(*Task)
-			if !task.NextRunTime.UTC().After(nowUTC) {
-				tasksToMove = append(tasksToMove, task)
-				removeEls = append(removeEls, e)
-				delete(level.tasks, task.ID)
-			}
-		}
-		for _, el := range removeEls {
-			slot.Remove(el)
-		}
+		// Collect expired tasks from current slot
+		expiredTasks := level.collectExpiredTasksFromCurrentSlot(nowUTC)
 
-		// Then process ticks if any
 		if ticks > 0 {
 			level.lastTickTime = level.lastTickTime.Add(time.Duration(ticks) * level.tickDuration)
 			level.currentSlot = (level.currentSlot + ticks) % level.wheelSize
 
-			slot := level.slots[level.currentSlot]
-			for e := slot.Front(); e != nil; e = e.Next() {
-				task := e.Value.(*Task)
-				tasksToMove = append(tasksToMove, task)
-				delete(level.tasks, task.ID)
-			}
-			// Clear the slot
-			slot.Init()
-		}
+			// Collect expired tasks from new slot and remaining tasks
+			newExpiredTasks, remainingTasks := level.processSlotTick(nowUTC)
+			expiredTasks = append(expiredTasks, newExpiredTasks...)
 
-		// step 2: move tasks
-		if len(tasksToMove) > 0 {
-			if i == 0 {
-				readyTasks = append(readyTasks, tasksToMove...)
-			} else {
-				dtw.mu.RLock()
-				lowerLevel := dtw.levels[i-1]
-				dtw.mu.RUnlock()
-
-				for _, task := range tasksToMove {
-					lowerLevel.addTask(task)
-				}
-			}
+			// Redistribute remaining tasks
+			level.redistributeRemainingTasks(remainingTasks, i, dtw)
 		}
 
 		level.mu.Unlock()
+
+		// Move expired tasks to appropriate level
+		dtw.moveExpiredTasks(expiredTasks, i, &readyTasks)
 	}
 
 	return readyTasks
+}
+
+// Helper method to collect expired tasks from current slot
+func (ltw *LevelTimeWheel) collectExpiredTasksFromCurrentSlot(now time.Time) []*Task {
+	var expiredTasks []*Task
+	slot := ltw.slots[ltw.currentSlot]
+
+	var elementsToRemove []*list.Element
+	for e := slot.Front(); e != nil; e = e.Next() {
+		task := e.Value.(*Task)
+		if !task.NextRunTime.UTC().After(now) {
+			expiredTasks = append(expiredTasks, task)
+			elementsToRemove = append(elementsToRemove, e)
+			delete(ltw.tasks, task.ID)
+		}
+	}
+
+	for _, el := range elementsToRemove {
+		slot.Remove(el)
+	}
+
+	return expiredTasks
+}
+
+// Helper method to process slot tick
+func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
+	var expiredTasks []*Task
+	var remainingTasks []*Task
+
+	slot := ltw.slots[ltw.currentSlot]
+
+	// Collect expired tasks
+	var elementsToRemove []*list.Element
+	for e := slot.Front(); e != nil; e = e.Next() {
+		task := e.Value.(*Task)
+		if !task.NextRunTime.UTC().After(now) {
+			expiredTasks = append(expiredTasks, task)
+			elementsToRemove = append(elementsToRemove, e)
+			delete(ltw.tasks, task.ID)
+		}
+	}
+
+	// Remove expired tasks
+	for _, el := range elementsToRemove {
+		slot.Remove(el)
+	}
+
+	// Collect remaining tasks
+	for e := slot.Front(); e != nil; e = e.Next() {
+		task := e.Value.(*Task)
+		remainingTasks = append(remainingTasks, task)
+		delete(ltw.tasks, task.ID)
+	}
+
+	// Clear the slot
+	slot.Init()
+
+	return expiredTasks, remainingTasks
+}
+
+// Helper method to redistribute remaining tasks
+func (ltw *LevelTimeWheel) redistributeRemainingTasks(remainingTasks []*Task, levelIndex int, dtw *DynamicTimeWheel) {
+	for _, task := range remainingTasks {
+		if levelIndex == 0 {
+			// For level 0, re-add to the same level with updated timing
+			ltw.addTask(task)
+		} else {
+			// For higher levels, move to lower level
+			dtw.mu.RLock()
+			lowerLevel := dtw.levels[levelIndex-1]
+			dtw.mu.RUnlock()
+			lowerLevel.addTask(task)
+		}
+	}
+}
+
+// Helper method to move expired tasks to appropriate level
+func (dtw *DynamicTimeWheel) moveExpiredTasks(expiredTasks []*Task, levelIndex int, readyTasks *[]*Task) {
+	if len(expiredTasks) == 0 {
+		return
+	}
+
+	if levelIndex == 0 {
+		*readyTasks = append(*readyTasks, expiredTasks...)
+	} else {
+		dtw.mu.RLock()
+		lowerLevel := dtw.levels[levelIndex-1]
+		dtw.mu.RUnlock()
+
+		for _, task := range expiredTasks {
+			lowerLevel.addTask(task)
+		}
+	}
 }
 
 func (dtw *DynamicTimeWheel) TaskExist(taskID string) bool {
