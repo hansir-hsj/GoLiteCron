@@ -218,16 +218,15 @@ func (s *Scheduler) run() {
 							break
 						}
 					}
-
 					// Convert the current time to the time zone of the task
 					nowUTC := time.Now().UTC()
 					nowInTaskZone := nowUTC.In(t.CronParser.location)
-					nextRunTime := task.CronParser.Next(nowInTaskZone)
+					nextRunTime := t.CronParser.Next(nowInTaskZone)
 
 					updateTask := &Task{
-						ID:          task.ID,
-						Job:         task.Job,
-						CronParser:  task.CronParser,
+						ID:          t.ID,
+						Job:         t.Job,
+						CronParser:  t.CronParser,
 						NextRunTime: nextRunTime,
 						PreRunTime:  nowInTaskZone,
 						Running:     0,

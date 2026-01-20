@@ -203,13 +203,18 @@ func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
 }
 
 // Helper method to redistribute remaining tasks
+// IMPORTANT: This method is called while ltw.mu is already held by the caller (Tick).
+// For levelIndex == 0, we must use addTaskLocked to avoid deadlock.
+// For levelIndex > 0, lowerLevel is a different object, so we can safely call addTask.
 func (ltw *LevelTimeWheel) redistributeRemainingTasks(remainingTasks []*Task, levelIndex int, dtw *DynamicTimeWheel) {
 	for _, task := range remainingTasks {
 		if levelIndex == 0 {
 			// For level 0, re-add to the same level with updated timing
-			ltw.addTask(task)
+			// Use addTaskLocked since we already hold ltw.mu
+			ltw.addTaskLocked(task)
 		} else {
 			// For higher levels, move to lower level
+			// lowerLevel is a different LevelTimeWheel, so it's safe to call addTask
 			dtw.mu.RLock()
 			lowerLevel := dtw.levels[levelIndex-1]
 			dtw.mu.RUnlock()
@@ -291,6 +296,13 @@ func (ltw *LevelTimeWheel) addTask(task *Task) {
 	ltw.mu.Lock()
 	defer ltw.mu.Unlock()
 
+	ltw.addTaskLocked(task)
+}
+
+// addTaskLocked adds a task without acquiring the lock.
+// The caller must hold ltw.mu before calling this method.
+// This is used internally to avoid deadlock when redistributing tasks.
+func (ltw *LevelTimeWheel) addTaskLocked(task *Task) {
 	taskTimeUTC := task.NextRunTime.UTC()
 	offset := max(taskTimeUTC.Sub(ltw.lastTickTime), 0)
 
