@@ -185,6 +185,65 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 		return result, nil
 	}
 
+	// Check "/" before "-" because "10-30/5" contains both but should be handled as step
+	if strings.Contains(field, "/") {
+		parts := strings.Split(field, "/")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid step format: %s", field)
+		}
+
+		step, err := strconv.Atoi(parts[1])
+		if err != nil || step <= 0 {
+			return nil, fmt.Errorf("invalid step value: %s", parts[1])
+		}
+
+		// Determine the start and end values for the step
+		// Supports: */step, start-end/step, or just number/step
+		base := parts[0]
+		start := min
+		end := max
+
+		if base == "*" || base == "?" {
+			// */step: start from min, go to max
+			start = min
+			end = max
+		} else if strings.Contains(base, "-") {
+			// start-end/step: parse the range
+			rangeParts := strings.Split(base, "-")
+			if len(rangeParts) != 2 {
+				return nil, fmt.Errorf("invalid range format in step expression: %s", field)
+			}
+			start, err = strconv.Atoi(rangeParts[0])
+			if err != nil || start < min || start > max {
+				return nil, fmt.Errorf("invalid range start in step expression: %s", rangeParts[0])
+			}
+			end, err = strconv.Atoi(rangeParts[1])
+			if err != nil || end < min || end > max {
+				return nil, fmt.Errorf("invalid range end in step expression: %s", rangeParts[1])
+			}
+			if start > end {
+				return nil, fmt.Errorf("range start cannot be greater than end: %s", field)
+			}
+		} else {
+			// number/step: start from the number
+			start, err = strconv.Atoi(base)
+			if err != nil || start < min || start > max {
+				return nil, fmt.Errorf("invalid start value in step expression: %s", base)
+			}
+			end = max
+		}
+
+		// Generate values from start to end with given step
+		// No need to check if (end-start+1) % step == 0, standard cron allows any step
+		result := make(map[int]struct{})
+		for i := start; i <= end; i += step {
+			result[i] = struct{}{}
+		}
+
+		return result, nil
+	}
+
+	// Pure range without step (e.g., "10-30")
 	if strings.Contains(field, "-") {
 		parts := strings.Split(field, "-")
 		if len(parts) != 2 {
@@ -207,30 +266,6 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 
 		result := make(map[int]struct{}, end-start+1)
 		for i := start; i <= end; i++ {
-			result[i] = struct{}{}
-		}
-
-		return result, nil
-	}
-
-	if strings.Contains(field, "/") {
-		parts := strings.Split(field, "/")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid step format: %s", field)
-		}
-
-		step, err := strconv.Atoi(parts[1])
-		if err != nil || step <= 0 {
-			return nil, fmt.Errorf("invalid step value: %s", parts[1])
-		}
-
-		radix := max - min + 1
-		if radix%step != 0 {
-			return nil, fmt.Errorf("invalid step value: %s", parts[1])
-		}
-
-		result := make(map[int]struct{})
-		for i := min; i <= max; i += step {
 			result[i] = struct{}{}
 		}
 
@@ -359,6 +394,7 @@ func (p *CronParser) Next(t time.Time) time.Time {
 			return next
 		}
 	}
+
 }
 
 func contains(m map[int]struct{}, value int) bool {
