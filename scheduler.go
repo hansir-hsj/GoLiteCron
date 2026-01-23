@@ -207,18 +207,18 @@ func (s *Scheduler) run() {
 					for i := 0; i < t.CronParser.retry+1; i++ {
 						if timeout > 0 {
 							ctx, cancel := context.WithTimeout(context.Background(), timeout)
+							defer cancel() // Ensure resources are released
 
 							done := make(chan error, 1)
 							go func() {
-								done <- t.Job.Execute()
+								done <- t.Job.Execute(ctx)
 							}()
 
 							select {
 							case err = <-done:
-								cancel()
+								// Task completed successfully or failed within timeout
 							case <-ctx.Done():
 								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
-								cancel()
 								timedOut = true
 							}
 
@@ -230,7 +230,7 @@ func (s *Scheduler) run() {
 								break
 							}
 						} else {
-							err = t.Job.Execute()
+							err = t.Job.Execute(context.Background())
 						}
 
 						if err != nil {

@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func (j *testJob) ID() string {
 	return j.id
 }
 
-func (j *testJob) Execute() error {
+func (j *testJob) Execute(ctx context.Context) error {
 	// non-blocking send to avoid hanging the test
 	select {
 	case j.runCh <- struct{}{}:

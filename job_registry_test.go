@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -78,36 +79,16 @@ func TestGetJob_NotFound(t *testing.T) {
 
 func TestFuncJob_Execute_NilFn(t *testing.T) {
 	job := &FuncJob{id: "nil-fn-job", fn: nil}
-	err := job.Execute()
+	err := job.Execute(context.Background())
 	if err == nil {
 		t.Fatal("expected error when fn is nil")
 	}
 }
 
 func TestFuncJob_ID(t *testing.T) {
-	job := &FuncJob{id: "test-id", fn: func() error { return nil }}
+	job := &FuncJob{id: "test-id", fn: func(ctx context.Context) error { return nil }}
 	if job.ID() != "test-id" {
 		t.Errorf("expected ID 'test-id', got '%s'", job.ID())
-	}
-}
-
-func TestWrapJob(t *testing.T) {
-	called := false
-	job := WrapJob("wrapped-job", func() error {
-		called = true
-		return nil
-	})
-
-	if job.ID() != "wrapped-job" {
-		t.Errorf("expected ID 'wrapped-job', got '%s'", job.ID())
-	}
-
-	if err := job.Execute(); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	if !called {
-		t.Fatal("wrapped function was not called")
 	}
 }
 

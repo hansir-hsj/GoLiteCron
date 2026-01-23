@@ -160,14 +160,18 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 			newExpiredTasks, remainingTasks := level.processSlotTick(nowUTC)
 			expiredTasks = append(expiredTasks, newExpiredTasks...)
 
-			// Redistribute remaining tasks
-			level.redistributeRemainingTasks(remainingTasks, i, dtw)
+			// Temporarily store remaining tasks to redistribute after unlocking
+			// We cannot call redistributeRemainingTasks here because it might acquire dtw.mu or lowerLevel.mu
+			// violating lock ordering (Level -> DTW -> LowerLevel vs DTW -> Level)
+			expiredTasks = append(expiredTasks, remainingTasks...)
 		}
 
 		level.mu.Unlock()
 
-		// Move expired tasks to appropriate level
-		dtw.moveExpiredTasks(expiredTasks, i, &readyTasks)
+		// Move all collected tasks (expired and remaining-but-needs-move) to appropriate level
+		// Note: "expiredTasks" here effectively contains all tasks that were popped from the current slot.
+		// Some are truly expired (ready to run), some are just cascading down (remaining).
+		dtw.redistributeTasks(expiredTasks, i, &readyTasks)
 	}
 
 	return readyTasks
@@ -231,41 +235,44 @@ func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
 	return expiredTasks, remainingTasks
 }
 
-// Helper method to redistribute remaining tasks
-// IMPORTANT: This method is called while ltw.mu is already held by the caller (Tick).
-// For levelIndex == 0, we must use addTaskLocked to avoid deadlock.
-// For levelIndex > 0, lowerLevel is a different object, so we can safely call addTask.
-func (ltw *LevelTimeWheel) redistributeRemainingTasks(remainingTasks []*Task, levelIndex int, dtw *DynamicTimeWheel) {
-	for _, task := range remainingTasks {
-		if levelIndex == 0 {
-			// For level 0, re-add to the same level with updated timing
-			// Use addTaskLocked since we already hold ltw.mu
-			ltw.addTaskLocked(task)
-		} else {
-			// For higher levels, move to lower level
-			// lowerLevel is a different LevelTimeWheel, so it's safe to call addTask
-			dtw.mu.RLock()
-			lowerLevel := dtw.levels[levelIndex-1]
-			dtw.mu.RUnlock()
-			lowerLevel.addTask(task)
-		}
-	}
-}
-
-// Helper method to move expired tasks to appropriate level
-func (dtw *DynamicTimeWheel) moveExpiredTasks(expiredTasks []*Task, levelIndex int, readyTasks *[]*Task) {
-	if len(expiredTasks) == 0 {
+// Helper method to redistribute tasks (both remaining and expired from higher levels)
+// This method handles tasks that were popped from a slot and need to be placed back
+// into the correct level (either current level or lower level).
+//
+// For levelIndex == 0:
+// - Tasks that are expired (<= now) are ready to run.
+// - Tasks that are not expired are re-added to level 0.
+//
+// For levelIndex > 0:
+// - Tasks are moved to levelIndex - 1.
+func (dtw *DynamicTimeWheel) redistributeTasks(tasks []*Task, levelIndex int, readyTasks *[]*Task) {
+	if len(tasks) == 0 {
 		return
 	}
 
+	now := time.Now().UTC()
+
 	if levelIndex == 0 {
-		*readyTasks = append(*readyTasks, expiredTasks...)
+		dtw.mu.RLock()
+		level0 := dtw.levels[0]
+		dtw.mu.RUnlock()
+		
+		// For Level 0, we must split tasks: ready vs re-queue
+		// We are NOT holding level0.mu here, so we can safely call level0.addTask which acquires the lock.
+		for _, task := range tasks {
+			if !task.NextRunTime.UTC().After(now) {
+				*readyTasks = append(*readyTasks, task)
+			} else {
+				level0.addTask(task)
+			}
+		}
 	} else {
+		// For higher levels, push everything down to the next level
 		dtw.mu.RLock()
 		lowerLevel := dtw.levels[levelIndex-1]
 		dtw.mu.RUnlock()
 
-		for _, task := range expiredTasks {
+		for _, task := range tasks {
 			lowerLevel.addTask(task)
 		}
 	}
