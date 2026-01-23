@@ -1,49 +1,191 @@
 # GoLiteCron
 
-[中文文档](docs/readme.zh.md) | [使用指南](docs/usage.md) | [链式API](docs/chain_usage.md)
+[![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-blue)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen.svg)](.)
 
-## Overview
-GoLiteCron is a lightweight, high-performance cron job scheduling framework for Go applications. It provides a simple yet powerful interface for managing scheduled tasks with support for various cron expressions, time zones, task timeouts, and retries. The framework offers flexible storage options (TimeWheel and Heap) to suit different application scenarios.
+A lightweight, high-performance cron job scheduler for Go.
+
+[中文文档](docs/README.zh.md)
 
 ## Features
-- **Cron Expression Support**
-  - Standard cron syntax (minutes, hours, day of month, month, day of week)
-  - Extended syntax with seconds (using WithSeconds() option)
-  - Year specification (using WithYears() option)
-  - Predefined macros (@yearly, @monthly, @weekly, @daily, @hourly, @minutely)
-- **Flexible Storage Options**
-  - TimeWheel: Efficient for high-frequency tasks and large numbers of scheduled jobs
-  - Heap: Simple implementation suitable for general-purpose scheduling
-- **Task Management Features**
-  - Custom time zones for task execution
-  - Configurable timeout for task execution
-  - Automatic retry mechanism for failed tasks
-  - Task registration by ID for easy management
-  - Support for loading tasks from configuration files (YAML/JSON)
-- **Reliability**
-  - Panic recovery for individual tasks
-  - Atomic operations for task status management
-  - Proper resource cleanup and graceful shutdown
+
+| Feature | Description |
+|---------|-------------|
+| 🕐 Cron Expressions | Standard 5-field, 6-field (with seconds), 7-field (with years) |
+| 🔗 Chain API | Fluent API: `scheduler.Every(10).Seconds().Do(job)` |
+| ⏱️ Timeout & Retry | Built-in timeout control and automatic retry |
+| 🌍 Time Zones | Full timezone support for task execution |
+| 📦 Storage Backends | TimeWheel (high performance) or Heap (simple) |
+| 📄 Config Files | Load tasks from YAML/JSON configuration |
+| 🛡️ Panic Recovery | Automatic recovery from panicked tasks |
 
 ## Installation
+
 ```bash
 go get -u github.com/hansir-hsj/GoLiteCron
 ```
 
-## Documentation
-- **[Usage Guide](docs/usage.md)** - Complete usage examples and API documentation
-- **[Chain API](docs/chain_usage.md)** - Natural language style task scheduling API
-- **[中文文档](docs/readme.zh.md)** - Chinese documentation
+## Quick Start
 
-## Architecture
-GoLiteCron consists of several key components:
-- **Scheduler**: The core component that manages task execution and coordinates with storage backend.
-- **Task Storage**: Implements the storage and retrieval of tasks. Two implementations are provided:
-  - TimeWheel: A multi-level time wheel implementation that efficiently handles large numbers of tasks with varying intervals.
-  - Heap: A priority queue implementation that orders tasks by their next execution time.
-- **Cron Parser**: Parses cron expressions and calculates the next execution time for tasks.
-- **Job Registry**: Manages job functions that can be referenced by name in configuration files.
-- **Config Loader**: Loads task configurations from YAML or JSON files.
+```go
+package main
+
+import (
+    "fmt"
+    cron "github.com/hansir-hsj/GoLiteCron"
+)
+
+func main() {
+    scheduler := cron.NewScheduler()
+
+    // Chain API (recommended)
+    scheduler.Every(10).Seconds().Do(func() {
+        fmt.Println("runs every 10 seconds")
+    })
+
+    // Cron expression
+    scheduler.AddTask("*/5 * * * *", cron.WrapJob("five-min", func() error {
+        fmt.Println("runs every 5 minutes")
+        return nil
+    }))
+
+    scheduler.Start()
+    defer scheduler.Stop()
+    select {} // keep running
+}
+```
+
+## Cron Expression
+
+### Standard Format (5 fields)
+```
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12)
+│ │ │ │ ┌───────────── day of week (0-6, Sunday=0)
+* * * * *
+```
+
+### Extended Format (6 fields, requires `WithSeconds()`)
+```
+┌───────────── second (0-59)
+│ ┌───────────── minute (0-59)
+│ │ ┌───────────── hour (0-23)
+│ │ │ ┌───────────── day of month (1-31)
+│ │ │ │ ┌───────────── month (1-12)
+│ │ │ │ │ ┌───────────── day of week (0-6)
+* * * * * *
+```
+
+### Special Characters
+
+| Char | Description | Example |
+|------|-------------|---------|
+| `*` | Any value | `* * * * *` every minute |
+| `,` | List | `1,15 * * * *` minute 1 and 15 |
+| `-` | Range | `1-5 * * * *` minutes 1-5 |
+| `/` | Step | `*/10 * * * *` every 10 minutes |
+| `L` | Last | `0 0 L * *` last day of month |
+| `W` | Weekday | `0 0 15W * *` nearest weekday to 15th |
+
+### Predefined Macros
+
+| Macro | Equivalent | Description |
+|-------|------------|-------------|
+| `@yearly` | `0 0 1 1 *` | Once a year (Jan 1) |
+| `@monthly` | `0 0 1 * *` | Once a month (1st) |
+| `@weekly` | `0 0 * * 0` | Once a week (Sunday) |
+| `@daily` | `0 0 * * *` | Once a day (midnight) |
+| `@hourly` | `0 * * * *` | Once an hour |
+| `@minutely` | `* * * * *` | Once a minute |
+
+## Chain API
+
+```go
+// Time intervals
+scheduler.Every(30).Seconds().Do(job)
+scheduler.Every(5).Minutes().Do(job)
+scheduler.Every(2).Hours().Do(job)
+
+// Specific time
+scheduler.Every().Day().At("10:30").Do(job)
+scheduler.Every().Monday().At("09:00").Do(job)
+
+// With options
+loc, _ := time.LoadLocation("Asia/Shanghai")
+scheduler.Every().Day().At("09:00").
+    WithTimeout(30*time.Second).
+    WithRetry(3).
+    WithLocation(loc).
+    Do(job, "custom-task-id")
+```
+
+## Options
+
+```go
+cron.WithTimeout(30 * time.Second)  // Task timeout
+cron.WithRetry(3)                   // Retry on failure
+cron.WithLocation(loc)              // Timezone
+cron.WithSeconds()                  // Enable 6-field cron
+cron.WithYears()                    // Enable 7-field cron
+```
+
+## Storage Backends
+
+```go
+// Heap (default) - simple, good for fewer tasks
+scheduler := cron.NewScheduler()
+
+// TimeWheel - efficient for many tasks
+scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
+```
+
+## Load from Config
+
+**config.yaml:**
+```yaml
+tasks:
+  - id: "backup"
+    cron_expr: "0 2 * * *"
+    func_name: "backupJob"
+    timeout: 60000
+    retry: 2
+```
+
+**main.go:**
+```go
+cron.RegisterJob("backupJob", func() error {
+    return doBackup()
+})
+
+config, _ := cron.LoadFromYaml("config.yaml")
+scheduler := cron.NewScheduler()
+scheduler.LoadTasksFromConfig(config)
+scheduler.Start()
+```
+
+## Task Management
+
+```go
+// List tasks
+for _, task := range scheduler.GetTasks() {
+    fmt.Printf("%s -> %s\n", task.ID, task.NextRunTime)
+}
+
+// Remove task
+scheduler.RemoveTask(&cron.Task{ID: "task-id"})
+
+// Graceful shutdown
+scheduler.Stop()
+```
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md) - Detailed guide with examples
+- [中文文档](docs/README.zh.md) - Chinese documentation
 
 ## License
-GoLiteCron is released under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+MIT License - see [LICENSE](LICENSE)
