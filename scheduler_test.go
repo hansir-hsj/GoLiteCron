@@ -64,10 +64,10 @@ func TestNewScheduler_AddGetRemove(t *testing.T) {
 		t.Fatalf("GetTaskInfo did not contain job id: %s", info)
 	}
 
-	// RemoveTask currently returns false in the implementation.
+	// RemoveTask should return true when task exists and is removed
 	removed := s.RemoveTask(tasks[0])
-	if removed != false {
-		t.Fatalf("RemoveTask returned %v, expected false (current implementation)", removed)
+	if removed != true {
+		t.Fatalf("RemoveTask returned %v, expected true", removed)
 	}
 
 	// underlying storage should no longer have the task

@@ -7,14 +7,15 @@ import (
 	"time"
 )
 
-// ScheduleBuilder 提供链式API来构建调度表达式
+// ScheduleBuilder provides a fluent API for building schedule expressions
 type ScheduleBuilder struct {
-	scheduler *Scheduler
-	interval  int
-	unit      string
-	timeSpec  string
-	weekday   time.Weekday
-	options   []Option
+	scheduler      *Scheduler
+	interval       int
+	unit           string
+	timeSpec       string
+	weekday        time.Weekday
+	options        []Option
+	secondsEnabled bool // Track if WithSeconds was already added
 }
 
 // Every 开始一个新的调度构建器
@@ -156,7 +157,10 @@ func (sb *ScheduleBuilder) WithLocation(loc *time.Location) *ScheduleBuilder {
 }
 
 func (sb *ScheduleBuilder) WithSeconds() *ScheduleBuilder {
-	sb.options = append(sb.options, WithSeconds())
+	if !sb.secondsEnabled {
+		sb.options = append(sb.options, WithSeconds())
+		sb.secondsEnabled = true
+	}
 	return sb
 }
 
@@ -209,11 +213,10 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 	case "second":
 		if sb.interval == 1 {
 			cronExpr = "* * * * * *"
-			sb.options = append(sb.options, WithSeconds())
 		} else {
 			cronExpr = fmt.Sprintf("*/%d * * * * *", sb.interval)
-			sb.options = append(sb.options, WithSeconds())
 		}
+		sb.WithSeconds() // Use method to avoid duplicate
 
 	case "minute":
 		if sb.interval == 1 {
@@ -237,7 +240,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * *", second, minute, hour)
-				sb.options = append(sb.options, WithSeconds())
+				sb.WithSeconds() // Use method to avoid duplicate
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * *", minute, hour)
 			}
@@ -253,7 +256,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * 0", second, minute, hour)
-				sb.options = append(sb.options, WithSeconds())
+				sb.WithSeconds() // Use method to avoid duplicate
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * 0", minute, hour)
 			}
@@ -269,7 +272,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d 1 * *", second, minute, hour)
-				sb.options = append(sb.options, WithSeconds())
+				sb.WithSeconds() // Use method to avoid duplicate
 			} else {
 				cronExpr = fmt.Sprintf("%d %d 1 * *", minute, hour)
 			}
@@ -290,7 +293,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * %d", second, minute, hour, weekdayNum)
-				sb.options = append(sb.options, WithSeconds())
+				sb.WithSeconds() // Use method to avoid duplicate
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * %d", minute, hour, weekdayNum)
 			}

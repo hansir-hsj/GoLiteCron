@@ -83,22 +83,51 @@ func (dtw *DynamicTimeWheel) AddTask(task *Task) {
 	now := time.Now().UTC()
 	duration := max(task.NextRunTime.UTC().Sub(now), 0)
 
-	for dtw.maxCoverage() < duration {
-		dtw.expandLevel()
+	// Use write lock for the entire operation to prevent race conditions
+	dtw.mu.Lock()
+	defer dtw.mu.Unlock()
+
+	// Remove existing task with same ID from any level first
+	for _, level := range dtw.levels {
+		level.mu.Lock()
+		if _, exists := level.tasks[task.ID]; exists {
+			level.removeTask(task.ID)
+		}
+		level.mu.Unlock()
 	}
 
-	dtw.mu.RLock()
-	levels := dtw.levels
-	dtw.mu.RUnlock()
+	// Expand levels while holding the lock
+	for dtw.maxCoverageLocked() < duration {
+		dtw.expandLevelLocked()
+	}
 
-	for _, level := range levels {
+	// Find appropriate level and add task
+	for _, level := range dtw.levels {
 		levelCoverage := level.tickDuration * time.Duration(level.wheelSize)
 		if duration <= levelCoverage {
 			level.addTask(task)
 			return
 		}
 	}
+}
 
+// maxCoverageLocked returns max coverage without acquiring lock.
+// Caller must hold dtw.mu.
+func (dtw *DynamicTimeWheel) maxCoverageLocked() time.Duration {
+	max := time.Duration(0)
+	for _, level := range dtw.levels {
+		max += level.tickDuration * time.Duration(level.wheelSize)
+	}
+	return max
+}
+
+// expandLevelLocked expands levels without acquiring lock.
+// Caller must hold dtw.mu.
+func (dtw *DynamicTimeWheel) expandLevelLocked() {
+	lastLevel := dtw.levels[len(dtw.levels)-1]
+	newTick := lastLevel.tickDuration * time.Duration(lastLevel.wheelSize)
+	newLevel := newLevelTimeWheel(newTick, DefaultWheelSize)
+	dtw.levels = append(dtw.levels, newLevel)
 }
 
 func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {

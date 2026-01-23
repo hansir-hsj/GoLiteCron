@@ -40,6 +40,11 @@ type CronParser struct {
 	location      *time.Location
 	timeout       time.Duration
 	retry         int
+
+	// Track if dayOfMonth/dayOfWeek are wildcards for OR/AND logic.
+	// In standard cron, if both are specified (non-wildcard), they use OR logic.
+	dayOfMonthWildcard bool
+	dayOfWeekWildcard  bool
 }
 
 type Option func(*CronParser)
@@ -140,6 +145,14 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 			return nil, fmt.Errorf("invalid field %d (%s)", i, part)
 		}
 		parsed[rule.field] = vals
+
+		// Track wildcards for dayOfMonth/dayOfWeek OR logic
+		isWildcard := (part == "*" || part == "?")
+		if rule.field == DayOfMonth {
+			parser.dayOfMonthWildcard = isWildcard
+		} else if rule.field == DayOfWeek {
+			parser.dayOfWeekWildcard = isWildcard
+		}
 	}
 
 	fieldMap := map[FieldType]func(map[int]struct{}){
@@ -330,11 +343,26 @@ func (p *CronParser) normalization() {
 	}
 }
 
+// MaxIterations is the maximum number of iterations for Next() to prevent infinite loops.
+// Must cover 4 years to support leap year cron expressions (e.g., "0 0 29 2 *" for Feb 29).
+// This is the base value for minute-level precision; second-level precision multiplies by 60.
+const MaxIterations = 4 * 366 * 24 * 60 // ~2,108,160 iterations (4 years)
+
+// ErrNoNextTime indicates no valid next execution time was found within MaxIterations.
+var ErrNoNextTime = fmt.Errorf("no valid next execution time found within %d iterations", MaxIterations)
+
 func (p *CronParser) Next(t time.Time) time.Time {
 	t = t.In(p.location)
 	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 
-	for {
+	// Adjust max iterations based on precision level
+	maxIter := MaxIterations
+	if p.enableSeconds {
+		// Second-level precision: each iteration advances 1 second
+		maxIter = MaxIterations * 60
+	}
+
+	for i := 0; i < maxIter; i++ {
 		if p.enableSeconds {
 			next = next.Add(time.Second).Truncate(time.Second)
 		} else {
@@ -386,7 +414,26 @@ func (p *CronParser) Next(t time.Time) time.Time {
 			}
 		}
 
-		if dayOfMonthValid && dayOfWeekValid && secondValid &&
+		// Standard cron behavior for dayOfMonth and dayOfWeek:
+		// - If both are wildcards (*): match any day (AND logic, both always true)
+		// - If one is wildcard, use the other for matching
+		// - If both are specified (non-wildcard): use OR logic (match either)
+		var dayValid bool
+		if p.dayOfMonthWildcard && p.dayOfWeekWildcard {
+			// Both wildcards: always valid
+			dayValid = true
+		} else if p.dayOfMonthWildcard {
+			// Only dayOfWeek specified
+			dayValid = dayOfWeekValid
+		} else if p.dayOfWeekWildcard {
+			// Only dayOfMonth specified
+			dayValid = dayOfMonthValid
+		} else {
+			// Both specified: use OR logic (standard cron behavior)
+			dayValid = dayOfMonthValid || dayOfWeekValid
+		}
+
+		if dayValid && secondValid &&
 			(!p.enableYears || contains(p.years, year)) &&
 			contains(p.minutes, minute) &&
 			contains(p.hours, hour) &&
@@ -395,6 +442,9 @@ func (p *CronParser) Next(t time.Time) time.Time {
 		}
 	}
 
+	// No valid time found within max iterations, return zero value.
+	// Callers should check for zero value using Time.IsZero().
+	return time.Time{}
 }
 
 func contains(m map[int]struct{}, value int) bool {

@@ -12,4 +12,5 @@ type Task struct {
 	PreRunTime  time.Time
 
 	Running int32
+	Removed int32 // Set to 1 when task is explicitly removed by user
 }

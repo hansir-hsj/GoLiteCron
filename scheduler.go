@@ -118,6 +118,11 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 	nowInTaskZone := nowUTC.In(parser.location)
 	nextRunTime := parser.Next(nowInTaskZone)
 
+	// Check if a valid next run time was found
+	if nextRunTime.IsZero() {
+		return fmt.Errorf("failed to calculate next run time for task %s: cron expression may be invalid or unsatisfiable", id)
+	}
+
 	task := &Task{
 		ID:          id,
 		Job:         job,
@@ -131,6 +136,10 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 }
 
 func (s *Scheduler) RemoveTask(task *Task) bool {
+	// Always mark task as removed to prevent rescheduling after execution
+	// This is important even if task is currently executing (not in storage)
+	atomic.StoreInt32(&task.Removed, 1)
+
 	if !s.taskStorage.TaskExist(task.ID) {
 		return false
 	}
@@ -144,6 +153,8 @@ func (s *Scheduler) Start() {
 	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
 		return
 	}
+	// Recreate stopChan to allow restart after Stop
+	s.stopChan = make(chan struct{})
 	s.wg.Add(1)
 	go s.run()
 }
@@ -191,6 +202,7 @@ func (s *Scheduler) run() {
 					// timeout control
 					var err error
 					timeout := t.CronParser.timeout
+					timedOut := false
 
 					for i := 0; i < t.CronParser.retry+1; i++ {
 						if timeout > 0 {
@@ -207,6 +219,15 @@ func (s *Scheduler) run() {
 							case <-ctx.Done():
 								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
 								cancel()
+								timedOut = true
+							}
+
+							// Skip retries on timeout to prevent goroutine accumulation.
+							// Note: The timed-out goroutine may still be running (Go limitation).
+							// Recommendation: Job implementations should support context cancellation.
+							if timedOut {
+								fmt.Fprintf(os.Stderr, "Task %s timed out, skipping retries to prevent goroutine accumulation\n", t.ID)
+								break
 							}
 						} else {
 							err = t.Job.Execute()
@@ -222,6 +243,22 @@ func (s *Scheduler) run() {
 					nowUTC := time.Now().UTC()
 					nowInTaskZone := nowUTC.In(t.CronParser.location)
 					nextRunTime := t.CronParser.Next(nowInTaskZone)
+
+					// Check if a valid next run time was found
+					if nextRunTime.IsZero() {
+						fmt.Fprintf(os.Stderr, "Task %s: failed to calculate next run time, task will not be rescheduled\n", t.ID)
+						return
+					}
+
+					// Check if scheduler has been stopped
+					if atomic.LoadInt32(&s.running) == 0 {
+						return
+					}
+
+					// Check if task was explicitly removed during execution
+					if atomic.LoadInt32(&t.Removed) == 1 {
+						return
+					}
 
 					updateTask := &Task{
 						ID:          t.ID,
