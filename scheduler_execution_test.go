@@ -12,7 +12,7 @@ func TestTask_RetryOnError(t *testing.T) {
 	s := NewScheduler()
 
 	attemptCount := int32(0)
-	job := WrapJob("retry-test", func() error {
+	job, _ := WrapJob("retry-test", func() error {
 		count := atomic.AddInt32(&attemptCount, 1)
 		if count < 3 {
 			return errors.New("intentional error")
@@ -42,7 +42,7 @@ func TestTask_TimeoutExecution(t *testing.T) {
 	taskStarted := int32(0)
 	taskCompleted := int32(0)
 
-	job := WrapJob("timeout-test", func() error {
+	job, _ := WrapJob("timeout-test", func() error {
 		atomic.AddInt32(&taskStarted, 1)
 		time.Sleep(2 * time.Second) // Longer than timeout
 		atomic.AddInt32(&taskCompleted, 1)
@@ -72,7 +72,7 @@ func TestTask_TimeoutSkipsRetry(t *testing.T) {
 
 	attemptCount := int32(0)
 
-	job := WrapJob("timeout-retry-test", func() error {
+	job, _ := WrapJob("timeout-retry-test", func() error {
 		atomic.AddInt32(&attemptCount, 1)
 		time.Sleep(500 * time.Millisecond) // Longer than timeout
 		return nil
@@ -102,12 +102,12 @@ func TestTask_PanicRecovery(t *testing.T) {
 	panicCount := int32(0)
 	normalCount := int32(0)
 
-	panicJob := WrapJob("panic-job", func() error {
+	panicJob, _ := WrapJob("panic-job", func() error {
 		atomic.AddInt32(&panicCount, 1)
 		panic("intentional panic")
 	})
 
-	normalJob := WrapJob("normal-job", func() error {
+	normalJob, _ := WrapJob("normal-job", func() error {
 		atomic.AddInt32(&normalCount, 1)
 		return nil
 	})
@@ -145,7 +145,7 @@ func TestTask_RemoveDuringExecution(t *testing.T) {
 	removeConfirmed := make(chan struct{})
 	var taskRef *Task
 
-	job := WrapJob("remove-during-exec", func() error {
+	job, _ := WrapJob("remove-during-exec", func() error {
 		count := atomic.AddInt32(&executionCount, 1)
 		if count == 1 {
 			// Signal that task has started
@@ -209,7 +209,7 @@ func TestTask_PreventConcurrentExecution(t *testing.T) {
 	concurrentCount := int32(0)
 	maxConcurrent := int32(0)
 
-	job := WrapJob("no-concurrent", func() error {
+	job, _ := WrapJob("no-concurrent", func() error {
 		current := atomic.AddInt32(&concurrentCount, 1)
 		defer atomic.AddInt32(&concurrentCount, -1)
 
@@ -243,7 +243,7 @@ func TestTask_PreventConcurrentExecution(t *testing.T) {
 func TestTask_InvalidCronExpression(t *testing.T) {
 	s := NewScheduler()
 
-	job := WrapJob("invalid-cron", func() error { return nil })
+	job, _ := WrapJob("invalid-cron", func() error { return nil })
 
 	testCases := []struct {
 		expr string
@@ -271,7 +271,7 @@ func TestTask_SuccessfulExecution(t *testing.T) {
 	results := make(chan int, 10)
 	counter := int32(0)
 
-	job := WrapJob("success-test", func() error {
+	job, _ := WrapJob("success-test", func() error {
 		val := atomic.AddInt32(&counter, 1)
 		results <- int(val)
 		return nil
@@ -302,7 +302,7 @@ func TestTask_WithNegativeTimeout(t *testing.T) {
 	s := NewScheduler()
 
 	executed := int32(0)
-	job := WrapJob("neg-timeout", func() error {
+	job, _ := WrapJob("neg-timeout", func() error {
 		atomic.AddInt32(&executed, 1)
 		return nil
 	})
@@ -327,7 +327,7 @@ func TestTask_WithNegativeRetry(t *testing.T) {
 	s := NewScheduler()
 
 	attemptCount := int32(0)
-	job := WrapJob("neg-retry", func() error {
+	job, _ := WrapJob("neg-retry", func() error {
 		atomic.AddInt32(&attemptCount, 1)
 		return errors.New("intentional error")
 	})

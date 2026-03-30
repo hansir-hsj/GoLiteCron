@@ -25,6 +25,8 @@ type Scheduler struct {
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
 	running     int32
+	mu          sync.Mutex // protects Start/Stop lifecycle
+	taskMu      sync.Mutex // protects task check+add atomicity
 }
 
 func NewScheduler(storageType ...StorageType) *Scheduler {
@@ -78,7 +80,10 @@ func (s *Scheduler) LoadTasksFromConfig(config *Config) error {
 			opts = append(opts, WithLocation(loc))
 		}
 
-		job := WrapJob(taskConfig.ID, fn)
+		job, err := WrapJob(taskConfig.ID, fn)
+		if err != nil {
+			return fmt.Errorf("failed to wrap job %s: %w", taskConfig.FuncName, err)
+		}
 		if err := s.AddTask(taskConfig.CronExpr, job, opts...); err != nil {
 			return fmt.Errorf("failed to add task %s: %w", taskConfig.ID, err)
 		}
@@ -104,11 +109,8 @@ func (s *Scheduler) GetTaskInfo(taskID string) string {
 }
 
 func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
-	id := job.ID()
-	if s.taskStorage.TaskExist(id) {
-		return fmt.Errorf("task with ID %s already exists", id)
-	}
-
+	// Expensive operations outside the lock: cron parsing and Next() calculation
+	// do not require mutual exclusion
 	parser, err := newCronParser(expr, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to parse cron expression: %w", err)
@@ -120,15 +122,23 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 
 	// Check if a valid next run time was found
 	if nextRunTime.IsZero() {
-		return fmt.Errorf("failed to calculate next run time for task %s: cron expression may be invalid or unsatisfiable", id)
+		return fmt.Errorf("failed to calculate next run time for task %s: cron expression may be invalid or unsatisfiable", job.ID())
 	}
 
 	task := &Task{
-		ID:          id,
+		ID:          job.ID(),
 		Job:         job,
 		CronParser:  parser,
 		NextRunTime: nextRunTime,
 		PreRunTime:  nowInTaskZone,
+	}
+
+	// Lock only for the check+add to guarantee atomicity
+	s.taskMu.Lock()
+	defer s.taskMu.Unlock()
+
+	if s.taskStorage.TaskExist(task.ID) {
+		return fmt.Errorf("task with ID %s already exists", task.ID)
 	}
 	s.taskStorage.AddTask(task)
 
@@ -150,9 +160,13 @@ func (s *Scheduler) RemoveTask(task *Task) bool {
 }
 
 func (s *Scheduler) Start() {
-	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if atomic.LoadInt32(&s.running) == 1 {
 		return
 	}
+	atomic.StoreInt32(&s.running, 1)
 	// Recreate stopChan to allow restart after Stop
 	s.stopChan = make(chan struct{})
 	s.wg.Add(1)
@@ -160,9 +174,13 @@ func (s *Scheduler) Start() {
 }
 
 func (s *Scheduler) Stop() {
-	if !atomic.CompareAndSwapInt32(&s.running, 1, 0) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if atomic.LoadInt32(&s.running) == 0 {
 		return
 	}
+	atomic.StoreInt32(&s.running, 0)
 	close(s.stopChan)
 	s.wg.Wait()
 }
@@ -207,12 +225,16 @@ func (s *Scheduler) run() {
 					for i := 0; i < t.CronParser.retry+1; i++ {
 						if timeout > 0 {
 							ctx, cancel := context.WithTimeout(context.Background(), timeout)
-							defer cancel() // Ensure resources are released
 
-							done := make(chan error, 1)
-							go func() {
-								done <- t.Job.Execute(ctx)
+						done := make(chan error, 1)
+						go func() {
+							defer func() {
+								if r := recover(); r != nil {
+									done <- fmt.Errorf("panic in task %s: %v", t.ID, r)
+								}
 							}()
+							done <- t.Job.Execute(ctx)
+						}()
 
 							select {
 							case err = <-done:
@@ -221,6 +243,8 @@ func (s *Scheduler) run() {
 								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
 								timedOut = true
 							}
+
+							cancel() // Release context resources immediately after each iteration
 
 							// Skip retries on timeout to prevent goroutine accumulation.
 							// Note: The timed-out goroutine may still be running (Go limitation).

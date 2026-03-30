@@ -7,12 +7,13 @@ import (
 )
 
 type TaskQueue struct {
-	tasks []*Task
-	mu    sync.RWMutex
+	tasks   []*Task
+	taskIdx map[string]int // task ID -> index in heap
+	mu      sync.RWMutex
 }
 
 func NewTaskQueue() *TaskQueue {
-	tq := &TaskQueue{}
+	tq := &TaskQueue{taskIdx: make(map[string]int)}
 	heap.Init(tq)
 	return tq
 }
@@ -27,10 +28,14 @@ func (tq *TaskQueue) Less(i, j int) bool {
 
 func (tq *TaskQueue) Swap(i, j int) {
 	tq.tasks[i], tq.tasks[j] = tq.tasks[j], tq.tasks[i]
+	tq.taskIdx[tq.tasks[i].ID] = i
+	tq.taskIdx[tq.tasks[j].ID] = j
 }
 
 func (tq *TaskQueue) Push(task any) {
-	tq.tasks = append(tq.tasks, task.(*Task))
+	t := task.(*Task)
+	tq.taskIdx[t.ID] = len(tq.tasks)
+	tq.tasks = append(tq.tasks, t)
 }
 
 func (tq *TaskQueue) Pop() any {
@@ -39,6 +44,7 @@ func (tq *TaskQueue) Pop() any {
 	}
 	task := tq.tasks[len(tq.tasks)-1]
 	tq.tasks = tq.tasks[:len(tq.tasks)-1]
+	delete(tq.taskIdx, task.ID)
 	return task
 }
 
@@ -46,12 +52,8 @@ func (tq *TaskQueue) TaskExist(taskID string) bool {
 	tq.mu.RLock()
 	defer tq.mu.RUnlock()
 
-	for _, task := range tq.tasks {
-		if task.ID == taskID {
-			return true
-		}
-	}
-	return false
+	_, exists := tq.taskIdx[taskID]
+	return exists
 }
 
 func (tq *TaskQueue) AddTask(task *Task) {
@@ -74,11 +76,8 @@ func (tq *TaskQueue) RemoveTask(task *Task) {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
 
-	for i, t := range tq.tasks {
-		if t.ID == task.ID {
-			heap.Remove(tq, i)
-			break
-		}
+	if idx, ok := tq.taskIdx[task.ID]; ok {
+		heap.Remove(tq, idx)
 	}
 }
 

@@ -21,7 +21,7 @@ func TestRegisterJob_Single(t *testing.T) {
 		t.Fatal("expected to find registered job")
 	}
 
-	if err := fn(); err != nil {
+	if err := fn.(func() error)(); err != nil {
 		t.Fatalf("job execution failed: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestRegisterJob_Override(t *testing.T) {
 		t.Fatal("expected to find registered job")
 	}
 
-	if err := fn(); err != nil {
+	if err := fn.(func() error)(); err != nil {
 		t.Fatalf("job execution failed: %v", err)
 	}
 

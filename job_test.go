@@ -14,7 +14,7 @@ func TestWrapJob(t *testing.T) {
 		executed1 = true
 		return nil
 	}
-	job1 := WrapJob("test-id-1", jobFn1)
+	job1, _ := WrapJob("test-id-1", jobFn1)
 
 	if job1.ID() != "test-id-1" {
 		t.Errorf("expected ID 'test-id-1', got '%s'", job1.ID())
@@ -34,7 +34,7 @@ func TestWrapJob(t *testing.T) {
 		executed2 = true
 		return nil
 	}
-	job2 := WrapJob("test-id-2", jobFn2)
+	job2, _ := WrapJob("test-id-2", jobFn2)
 
 	if job2.ID() != "test-id-2" {
 		t.Errorf("expected ID 'test-id-2', got '%s'", job2.ID())
@@ -59,7 +59,7 @@ func TestJob_Cancellation(t *testing.T) {
 		}
 	}
 
-	job := WrapJob("cancel-test", jobFn)
+	job, _ := WrapJob("cancel-test", jobFn)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

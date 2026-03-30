@@ -13,7 +13,7 @@ func TestScheduler_StopAndRestart(t *testing.T) {
 	runCount := int32(0)
 
 	// First task
-	job1 := WrapJob("restart-test-1", func() error {
+	job1, _ := WrapJob("restart-test-1", func() error {
 		atomic.AddInt32(&runCount, 1)
 		return nil
 	})
@@ -33,7 +33,7 @@ func TestScheduler_StopAndRestart(t *testing.T) {
 	}
 
 	// Add a new task after stop (old task won't be rescheduled after stop - this is by design)
-	job2 := WrapJob("restart-test-2", func() error {
+	job2, _ := WrapJob("restart-test-2", func() error {
 		atomic.AddInt32(&runCount, 1)
 		return nil
 	})
@@ -57,7 +57,7 @@ func TestScheduler_StopAndRestart(t *testing.T) {
 func TestScheduler_StopIsIdempotent(t *testing.T) {
 	s := NewScheduler()
 
-	job := WrapJob("stop-test", func() error {
+	job, _ := WrapJob("stop-test", func() error {
 		return nil
 	})
 
@@ -79,7 +79,7 @@ func TestScheduler_StartIsIdempotent(t *testing.T) {
 	s := NewScheduler()
 
 	runCount := int32(0)
-	job := WrapJob("start-test", func() error {
+	job, _ := WrapJob("start-test", func() error {
 		atomic.AddInt32(&runCount, 1)
 		return nil
 	})
@@ -110,7 +110,7 @@ func TestScheduler_StopWaitsForRunningTasks(t *testing.T) {
 	taskStarted := make(chan struct{})
 	taskFinished := make(chan struct{})
 
-	job := WrapJob("long-task", func() error {
+	job, _ := WrapJob("long-task", func() error {
 		close(taskStarted)
 		time.Sleep(500 * time.Millisecond)
 		close(taskFinished)
@@ -159,12 +159,12 @@ func TestScheduler_ConcurrentTaskExecution(t *testing.T) {
 	task1Count := int32(0)
 	task2Count := int32(0)
 
-	job1 := WrapJob("task1", func() error {
+	job1, _ := WrapJob("task1", func() error {
 		atomic.AddInt32(&task1Count, 1)
 		return nil
 	})
 
-	job2 := WrapJob("task2", func() error {
+	job2, _ := WrapJob("task2", func() error {
 		atomic.AddInt32(&task2Count, 1)
 		return nil
 	})
@@ -193,8 +193,8 @@ func TestScheduler_ConcurrentTaskExecution(t *testing.T) {
 func TestScheduler_DuplicateTaskID(t *testing.T) {
 	s := NewScheduler()
 
-	job1 := WrapJob("duplicate-id", func() error { return nil })
-	job2 := WrapJob("duplicate-id", func() error { return nil })
+	job1, _ := WrapJob("duplicate-id", func() error { return nil })
+	job2, _ := WrapJob("duplicate-id", func() error { return nil })
 
 	if err := s.AddTask("* * * * *", job1); err != nil {
 		t.Fatalf("first AddTask failed: %v", err)
@@ -237,7 +237,7 @@ func TestScheduler_WithTimeWheel(t *testing.T) {
 	s := NewScheduler(StorageTypeTimeWheel)
 
 	runCount := int32(0)
-	job := WrapJob("timewheel-test", func() error {
+	job, _ := WrapJob("timewheel-test", func() error {
 		atomic.AddInt32(&runCount, 1)
 		return nil
 	})

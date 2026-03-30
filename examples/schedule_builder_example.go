@@ -35,10 +35,10 @@ func main() {
 		return
 	}
 
-	// 每5分钟执行一次
-	err = scheduler.Every(5).Minutes().Do(printJob("Task runs every 5 minutes"))
+	// 每分钟执行一次
+	err = scheduler.Every().Minutes().Do(printJob("Task runs every minutes"))
 	if err != nil {
-		fmt.Printf("Error adding 5-minute task: %v\n", err)
+		fmt.Printf("Error adding minute task: %v\n", err)
 		return
 	}
 
@@ -63,10 +63,10 @@ func main() {
 		return
 	}
 
-	// 每2周执行
-	err = scheduler.Every(2).Weeks().Do(printJob("Task runs every 2 weeks"))
+	// 每周执行
+	err = scheduler.Every(1).Weeks().Do(printJob("Task runs every week"))
 	if err != nil {
-		fmt.Printf("Error adding bi-weekly task: %v\n", err)
+		fmt.Printf("Error adding weekly task: %v\n", err)
 		return
 	}
 

@@ -348,9 +348,6 @@ func (p *CronParser) normalization() {
 // This is the base value for minute-level precision; second-level precision multiplies by 60.
 const MaxIterations = 4 * 366 * 24 * 60 // ~2,108,160 iterations (4 years)
 
-// ErrNoNextTime indicates no valid next execution time was found within MaxIterations.
-var ErrNoNextTime = fmt.Errorf("no valid next execution time found within %d iterations", MaxIterations)
-
 func (p *CronParser) Next(t time.Time) time.Time {
 	t = t.In(p.location)
 	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())

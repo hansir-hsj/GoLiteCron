@@ -69,16 +69,6 @@ func (dtw *DynamicTimeWheel) maxCoverage() time.Duration {
 	return max
 }
 
-func (dtw *DynamicTimeWheel) expandLevel() {
-	dtw.mu.Lock()
-	defer dtw.mu.Unlock()
-
-	lastLevel := dtw.levels[len(dtw.levels)-1]
-	newTick := lastLevel.tickDuration * time.Duration(lastLevel.wheelSize)
-	newLevel := newLevelTimeWheel(newTick, DefaultWheelSize)
-	dtw.levels = append(dtw.levels, newLevel)
-}
-
 func (dtw *DynamicTimeWheel) AddTask(task *Task) {
 	now := time.Now().UTC()
 	duration := max(task.NextRunTime.UTC().Sub(now), 0)
@@ -134,15 +124,16 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 	nowUTC := now.UTC()
 	var readyTasks []*Task
 
+	// Take a consistent snapshot of levels under a single lock acquisition.
+	// If expandLevelLocked adds new levels during this tick, they are skipped
+	// until the next tick, which is safe: new levels only contain far-future tasks.
 	dtw.mu.RLock()
-	levelCnt := len(dtw.levels)
+	levels := make([]*LevelTimeWheel, len(dtw.levels))
+	copy(levels, dtw.levels)
 	dtw.mu.RUnlock()
 
-	for i := levelCnt - 1; i >= 0; i-- {
-		dtw.mu.RLock()
-		level := dtw.levels[i]
-		dtw.mu.RUnlock()
-
+	for i := len(levels) - 1; i >= 0; i-- {
+		level := levels[i]
 		level.mu.Lock()
 
 		// Calculate ticks and update time/slot
@@ -153,10 +144,27 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 		expiredTasks := level.collectExpiredTasksFromCurrentSlot(nowUTC)
 
 		if ticks > 0 {
+			oldSlot := level.currentSlot
 			level.lastTickTime = level.lastTickTime.Add(time.Duration(ticks) * level.tickDuration)
 			level.currentSlot = (level.currentSlot + ticks) % level.wheelSize
+			newSlot := level.currentSlot
 
-			// Collect expired tasks from new slot and remaining tasks
+			// Collect ALL tasks from skipped intermediate slots.
+			// These slots' time range has fully elapsed, so all their tasks are overdue.
+			steps := ticks - 1
+			if steps >= level.wheelSize {
+				steps = level.wheelSize - 1 // cap: at most all other slots
+			}
+			for step := 1; step <= steps; step++ {
+				intermediateSlot := (oldSlot + step) % level.wheelSize
+				if intermediateSlot == newSlot {
+					continue // processSlotTick will handle the new current slot
+				}
+				skippedTasks := level.collectAllTasksFromSlot(intermediateSlot)
+				expiredTasks = append(expiredTasks, skippedTasks...)
+			}
+
+			// Process the new current slot (split expired vs remaining for redistribution)
 			newExpiredTasks, remainingTasks := level.processSlotTick(nowUTC)
 			expiredTasks = append(expiredTasks, newExpiredTasks...)
 
@@ -168,10 +176,9 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 
 		level.mu.Unlock()
 
-		// Move all collected tasks (expired and remaining-but-needs-move) to appropriate level
-		// Note: "expiredTasks" here effectively contains all tasks that were popped from the current slot.
-		// Some are truly expired (ready to run), some are just cascading down (remaining).
-		dtw.redistributeTasks(expiredTasks, i, &readyTasks)
+		// Move all collected tasks (expired and remaining-but-needs-move) to appropriate level.
+		// Uses the pre-snapshotted levels to avoid re-acquiring dtw.mu.
+		dtw.redistributeTasks(expiredTasks, i, levels, &readyTasks)
 	}
 
 	return readyTasks
@@ -235,17 +242,31 @@ func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
 	return expiredTasks, remainingTasks
 }
 
-// Helper method to redistribute tasks (both remaining and expired from higher levels)
-// This method handles tasks that were popped from a slot and need to be placed back
-// into the correct level (either current level or lower level).
+// collectAllTasksFromSlot removes and returns ALL tasks from the given slot.
+// Used for intermediate slots that have been completely skipped during tick advancement;
+// their time window has fully elapsed so all contained tasks are overdue.
+func (ltw *LevelTimeWheel) collectAllTasksFromSlot(slotIndex int) []*Task {
+	slot := ltw.slots[slotIndex]
+	var tasks []*Task
+	for e := slot.Front(); e != nil; e = e.Next() {
+		task := e.Value.(*Task)
+		tasks = append(tasks, task)
+		delete(ltw.tasks, task.ID)
+	}
+	slot.Init()
+	return tasks
+}
+
+// redistributeTasks handles tasks popped from a slot, placing them into the correct level.
+// It uses the pre-snapshotted levels slice to avoid re-acquiring dtw.mu during Tick().
 //
 // For levelIndex == 0:
 // - Tasks that are expired (<= now) are ready to run.
 // - Tasks that are not expired are re-added to level 0.
 //
 // For levelIndex > 0:
-// - Tasks are moved to levelIndex - 1.
-func (dtw *DynamicTimeWheel) redistributeTasks(tasks []*Task, levelIndex int, readyTasks *[]*Task) {
+// - Tasks are cascaded down to levelIndex - 1.
+func (dtw *DynamicTimeWheel) redistributeTasks(tasks []*Task, levelIndex int, levels []*LevelTimeWheel, readyTasks *[]*Task) {
 	if len(tasks) == 0 {
 		return
 	}
@@ -253,11 +274,8 @@ func (dtw *DynamicTimeWheel) redistributeTasks(tasks []*Task, levelIndex int, re
 	now := time.Now().UTC()
 
 	if levelIndex == 0 {
-		dtw.mu.RLock()
-		level0 := dtw.levels[0]
-		dtw.mu.RUnlock()
-		
-		// For Level 0, we must split tasks: ready vs re-queue
+		level0 := levels[0]
+		// For Level 0, split tasks: ready vs re-queue.
 		// We are NOT holding level0.mu here, so we can safely call level0.addTask which acquires the lock.
 		for _, task := range tasks {
 			if !task.NextRunTime.UTC().After(now) {
@@ -267,11 +285,8 @@ func (dtw *DynamicTimeWheel) redistributeTasks(tasks []*Task, levelIndex int, re
 			}
 		}
 	} else {
-		// For higher levels, push everything down to the next level
-		dtw.mu.RLock()
-		lowerLevel := dtw.levels[levelIndex-1]
-		dtw.mu.RUnlock()
-
+		// For higher levels, cascade everything down to the next level.
+		lowerLevel := levels[levelIndex-1]
 		for _, task := range tasks {
 			lowerLevel.addTask(task)
 		}
@@ -337,7 +352,7 @@ func (ltw *LevelTimeWheel) addTask(task *Task) {
 
 // addTaskLocked adds a task without acquiring the lock.
 // The caller must hold ltw.mu before calling this method.
-// This is used internally to avoid deadlock when redistributing tasks.
+// Used internally by addTask to avoid recursive locking.
 func (ltw *LevelTimeWheel) addTaskLocked(task *Task) {
 	taskTimeUTC := task.NextRunTime.UTC()
 	offset := max(taskTimeUTC.Sub(ltw.lastTickTime), 0)

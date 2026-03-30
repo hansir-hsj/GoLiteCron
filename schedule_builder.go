@@ -187,19 +187,24 @@ func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 	}
 
 	// 根据job类型进行包装
+	var wrapErr error
 	switch j := job.(type) {
 	case func() error:
-		wrappedJob = WrapJob(id, j)
+		wrappedJob, wrapErr = WrapJob(id, j)
 	case func():
-		wrappedJob = WrapJob(id, func() error {
+		wrappedJob, wrapErr = WrapJob(id, func() error {
 			j()
 			return nil
 		})
 	case Job:
 		// 如果传入的是Job接口，需要重新包装以使用新的ID
-		wrappedJob = WrapJob(id, j.Execute)
+		wrappedJob, wrapErr = WrapJob(id, j.Execute)
 	default:
 		return fmt.Errorf("unsupported job type: %T", job)
+	}
+
+	if wrapErr != nil {
+		return fmt.Errorf("failed to wrap job: %w", wrapErr)
 	}
 
 	return sb.scheduler.AddTask(cronExpr, wrappedJob, sb.options...)
@@ -233,6 +238,9 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 		}
 
 	case "day":
+		if sb.interval > 1 {
+			return "", fmt.Errorf("interval > 1 not supported for Day unit (cron cannot express 'every N days')")
+		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
 			if err != nil {
@@ -249,6 +257,9 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 		}
 
 	case "week":
+		if sb.interval > 1 {
+			return "", fmt.Errorf("interval > 1 not supported for Week unit (cron cannot express 'every N weeks')")
+		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
 			if err != nil {
@@ -265,6 +276,9 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 		}
 
 	case "month":
+		if sb.interval > 1 {
+			return "", fmt.Errorf("interval > 1 not supported for Month unit (cron cannot express 'every N months')")
+		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
 			if err != nil {

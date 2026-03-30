@@ -7,7 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func LoadFromYaml(path string) (*Config, error) {
+func LoadFromYAML(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -21,7 +21,12 @@ func LoadFromYaml(path string) (*Config, error) {
 	return &config, nil
 }
 
-func LoadFromJson(path string) (*Config, error) {
+// LoadFromYaml is deprecated. Use LoadFromYAML instead.
+func LoadFromYaml(path string) (*Config, error) {
+	return LoadFromYAML(path)
+}
+
+func LoadFromJSON(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -33,4 +38,9 @@ func LoadFromJson(path string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// LoadFromJson is deprecated. Use LoadFromJSON instead.
+func LoadFromJson(path string) (*Config, error) {
+	return LoadFromJSON(path)
 }

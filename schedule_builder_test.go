@@ -300,7 +300,7 @@ func TestScheduleBuilderDoFunction(t *testing.T) {
 	}
 
 	// Job interface
-	job := WrapJob("wrapped-job", func() error {
+	job, _ := WrapJob("wrapped-job", func() error {
 		return nil
 	})
 	err = scheduler.Every().Hour().Do(job, "test-task-3")
