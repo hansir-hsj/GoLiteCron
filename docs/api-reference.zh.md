@@ -33,7 +33,7 @@ type Task struct {
 
 ```go
 type Job interface {
-    Execute() error
+    Execute(ctx context.Context) error
     ID() string
 }
 ```
@@ -50,7 +50,7 @@ type Config struct {
 type TaskConfig struct {
     ID            string `yaml:"id" json:"id"`
     CronExpr      string `yaml:"cron_expr" json:"cron_expr"`
-    Timeout       int64  `yaml:"timeout" json:"timeout"`
+    Timeout       string `yaml:"timeout" json:"timeout"` // duration 字符串, 如 "30s"
     Retry         int    `yaml:"retry" json:"retry"`
     Location      string `yaml:"location" json:"location"`
     EnableSeconds bool   `yaml:"enable_seconds" json:"enable_seconds"`
@@ -72,6 +72,16 @@ const (
 )
 ```
 
+### Logger
+
+自定义日志接口。如未设置，默认输出到 `os.Stderr`。
+
+```go
+type Logger interface {
+    Printf(format string, args ...any)
+}
+```
+
 ## 函数
 
 ### NewScheduler
@@ -89,7 +99,8 @@ func NewScheduler(storageType ...StorageType) *Scheduler
 将简单函数包装为 `Job` 接口。
 
 ```go
-func WrapJob(id string, fn func() error) Job
+func WrapJob(id string, fn any) (Job, error)
+// fn 支持: func() error 或 func(context.Context) error
 ```
 
 ### RegisterJob / GetJob
@@ -97,8 +108,8 @@ func WrapJob(id string, fn func() error) Job
 管理用于配置加载的作业函数。
 
 ```go
-func RegisterJob(name string, fn func() error)
-func GetJob(name string) (func() error, bool)
+func RegisterJob(name string, fn any)    // fn: func() error 或 func(context.Context) error
+func GetJob(name string) (any, bool)     // 返回 fn 或 nil, ok
 ```
 
 ### LoadFromYaml / LoadFromJson
@@ -174,6 +185,14 @@ func (s *Scheduler) LoadTasksFromConfig(config *Config) error
 
 ```go
 func (s *Scheduler) Every(intervals ...int) *ScheduleBuilder
+```
+
+### WithLogger
+
+为调度器设置自定义日志记录器。必须在 `Start()` 前调用。
+
+```go
+func (s *Scheduler) WithLogger(l Logger)
 ```
 
 ## 选项

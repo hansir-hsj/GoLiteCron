@@ -150,7 +150,7 @@ tasks:
   - id: "backup"
     cron_expr: "0 2 * * *"
     func_name: "backupJob"
-    timeout: 60000
+    timeout: "1m"
     retry: 2
 ```
 

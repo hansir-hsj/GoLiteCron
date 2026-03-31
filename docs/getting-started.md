@@ -339,21 +339,21 @@ tasks:
   - id: "daily-backup"
     cron_expr: "0 2 * * *"
     func_name: "backupDatabase"
-    timeout: 300000      # 5 minutes in milliseconds
+    timeout: "5m"
     retry: 3
     location: "UTC"
 
   - id: "hourly-sync"
     cron_expr: "0 * * * *"
     func_name: "syncData"
-    timeout: 60000       # 1 minute
+    timeout: "1m"
     retry: 1
 
   - id: "realtime-check"
     cron_expr: "*/10 * * * * *"
     func_name: "healthCheck"
     enable_seconds: true
-    timeout: 5000
+    timeout: "5s"
 ```
 
 ### JSON Configuration
@@ -366,7 +366,7 @@ tasks:
       "id": "daily-backup",
       "cron_expr": "0 2 * * *",
       "func_name": "backupDatabase",
-      "timeout": 300000,
+      "timeout": "5m",
       "retry": 3,
       "location": "UTC"
     }

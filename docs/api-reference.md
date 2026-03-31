@@ -33,7 +33,7 @@ type Task struct {
 
 ```go
 type Job interface {
-    Execute() error
+    Execute(ctx context.Context) error
     ID() string
 }
 ```
@@ -50,7 +50,7 @@ type Config struct {
 type TaskConfig struct {
     ID            string `yaml:"id" json:"id"`
     CronExpr      string `yaml:"cron_expr" json:"cron_expr"`
-    Timeout       int64  `yaml:"timeout" json:"timeout"`
+    Timeout       string `yaml:"timeout" json:"timeout"` // duration string, e.g. "30s"
     Retry         int    `yaml:"retry" json:"retry"`
     Location      string `yaml:"location" json:"location"`
     EnableSeconds bool   `yaml:"enable_seconds" json:"enable_seconds"`
@@ -72,6 +72,16 @@ const (
 )
 ```
 
+### Logger
+
+Interface for custom logging. If not set, defaults to writing to `os.Stderr`.
+
+```go
+type Logger interface {
+    Printf(format string, args ...any)
+}
+```
+
 ## Functions
 
 ### NewScheduler
@@ -89,7 +99,8 @@ func NewScheduler(storageType ...StorageType) *Scheduler
 Wraps a simple function into a `Job` interface.
 
 ```go
-func WrapJob(id string, fn func() error) Job
+func WrapJob(id string, fn any) (Job, error)
+// fn supports: func() error or func(context.Context) error
 ```
 
 ### RegisterJob / GetJob
@@ -97,8 +108,8 @@ func WrapJob(id string, fn func() error) Job
 Manages job functions for configuration loading.
 
 ```go
-func RegisterJob(name string, fn func() error)
-func GetJob(name string) (func() error, bool)
+func RegisterJob(name string, fn any)         // fn: func() error or func(context.Context) error
+func GetJob(name string) (any, bool)          // returns fn or nil, ok
 ```
 
 ### LoadFromYaml / LoadFromJson
@@ -174,6 +185,14 @@ Starts a chain builder for defining tasks.
 
 ```go
 func (s *Scheduler) Every(intervals ...int) *ScheduleBuilder
+```
+
+### WithLogger
+
+Sets a custom logger for the scheduler. Must be called before `Start()`.
+
+```go
+func (s *Scheduler) WithLogger(l Logger)
 ```
 
 ## Options

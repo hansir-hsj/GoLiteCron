@@ -315,21 +315,21 @@ tasks:
   - id: "daily-backup"
     cron_expr: "0 2 * * *"
     func_name: "backupDatabase"
-    timeout: 300000      # 5分钟 (毫秒)
+    timeout: "5m"
     retry: 3
     location: "UTC"
 
   - id: "hourly-sync"
     cron_expr: "0 * * * *"
     func_name: "syncData"
-    timeout: 60000       # 1分钟
+    timeout: "1m"
     retry: 1
 
   - id: "realtime-check"
     cron_expr: "*/10 * * * * *"
     func_name: "healthCheck"
     enable_seconds: true
-    timeout: 5000
+    timeout: "5s"
 ```
 
 ### 加载并使用配置
