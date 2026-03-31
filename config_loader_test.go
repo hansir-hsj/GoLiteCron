@@ -12,7 +12,7 @@ func TestLoadFromYaml_Success(t *testing.T) {
   - id: "task1"
     cron_expr: "* * * * *"
     func_name: "testFunc"
-    timeout: 1000
+    timeout: "1s"
     retry: 3
   - id: "task2"
     cron_expr: "0 * * * *"
@@ -38,8 +38,8 @@ func TestLoadFromYaml_Success(t *testing.T) {
 		t.Errorf("expected task1 ID, got %s", config.Tasks[0].ID)
 	}
 
-	if config.Tasks[0].Timeout != 1000 {
-		t.Errorf("expected timeout 1000, got %d", config.Tasks[0].Timeout)
+	if config.Tasks[0].Timeout != "1s" {
+		t.Errorf("expected timeout 1s, got %s", config.Tasks[0].Timeout)
 	}
 
 	if config.Tasks[0].Retry != 3 {
@@ -75,7 +75,7 @@ func TestLoadFromJson_Success(t *testing.T) {
       "id": "json-task1",
       "cron_expr": "*/5 * * * *",
       "func_name": "jsonFunc",
-      "timeout": 2000,
+      "timeout": "2s",
       "retry": 2,
       "location": "UTC"
     }
@@ -149,7 +149,7 @@ func TestLoadFromYaml_WithAllFields(t *testing.T) {
   - id: "full-task"
     cron_expr: "0 0 * * * *"
     func_name: "fullFunc"
-    timeout: 5000
+    timeout: "5s"
     retry: 5
     location: "America/New_York"
     enable_seconds: true

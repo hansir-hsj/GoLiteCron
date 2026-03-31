@@ -296,9 +296,6 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 
 	case "weekday":
 		weekdayNum := int(sb.weekday)
-		if weekdayNum == 0 { // Sunday
-			weekdayNum = 0
-		}
 
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()

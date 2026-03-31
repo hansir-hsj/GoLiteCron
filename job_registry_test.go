@@ -269,7 +269,7 @@ func TestLoadTasksFromConfig_WithAllOptions(t *testing.T) {
 				ID:            "full-options-task",
 				CronExpr:      "0 0 0 * * * 2027", // 7 fields: sec min hour dom month dow year
 				FuncName:      "full-options-job",
-				Timeout:       5000,
+				Timeout:       "5s",
 				Retry:         3,
 				Location:      "UTC",
 				EnableSeconds: true,

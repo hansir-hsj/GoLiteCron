@@ -2,6 +2,7 @@ package golitecron
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,13 @@ type CronParser struct {
 	location      *time.Location
 	timeout       time.Duration
 	retry         int
+
+	// Pre-sorted slices for field-jumping algorithm in Next().
+	sortedSeconds []int
+	sortedMinutes []int
+	sortedHours   []int
+	sortedMonths  []int
+	sortedYears   []int
 
 	// Track if dayOfMonth/dayOfWeek are wildcards for OR/AND logic.
 	// In standard cron, if both are specified (non-wildcard), they use OR logic.
@@ -148,9 +156,10 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 
 		// Track wildcards for dayOfMonth/dayOfWeek OR logic
 		isWildcard := (part == "*" || part == "?")
-		if rule.field == DayOfMonth {
+		switch rule.field {
+		case DayOfMonth:
 			parser.dayOfMonthWildcard = isWildcard
-		} else if rule.field == DayOfWeek {
+		case DayOfWeek:
 			parser.dayOfWeekWildcard = isWildcard
 		}
 	}
@@ -341,112 +350,273 @@ func (p *CronParser) normalization() {
 	if p.enableSeconds && len(p.seconds) == 0 {
 		p.seconds = map[int]struct{}{0: {}}
 	}
+	// Pre-sort field values for field-jumping algorithm in Next().
+	p.sortedSeconds = sortedKeys(p.seconds)
+	p.sortedMinutes = sortedKeys(p.minutes)
+	p.sortedHours = sortedKeys(p.hours)
+	p.sortedMonths = sortedKeys(p.months)
+	if p.enableYears {
+		p.sortedYears = sortedKeys(p.years)
+	}
 }
 
-// MaxIterations is the maximum number of iterations for Next() to prevent infinite loops.
-// Must cover 4 years to support leap year cron expressions (e.g., "0 0 29 2 *" for Feb 29).
-// This is the base value for minute-level precision; second-level precision multiplies by 60.
-const MaxIterations = 4 * 366 * 24 * 60 // ~2,108,160 iterations (4 years)
+func sortedKeys(m map[int]struct{}) []int {
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	return keys
+}
 
+// Next returns the next time after t that matches the cron expression.
+// Uses a field-jumping algorithm: processes fields from most significant (year)
+// to least significant (second), jumping directly to the next valid value.
+// Complexity: O(F × V) where F=number of fields, V=max values per field.
+// Typical iterations: 10~50 instead of millions with brute force.
 func (p *CronParser) Next(t time.Time) time.Time {
 	t = t.In(p.location)
-	next := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, t.Location())
-
-	// Adjust max iterations based on precision level
-	maxIter := MaxIterations
 	if p.enableSeconds {
-		// Second-level precision: each iteration advances 1 second
-		maxIter = MaxIterations * 60
+		t = t.Add(time.Second).Truncate(time.Second)
+	} else {
+		t = t.Add(time.Minute).Truncate(time.Minute)
 	}
 
-	for i := 0; i < maxIter; i++ {
+	year := t.Year()
+	month := int(t.Month())
+	day := t.Day()
+	hour := t.Hour()
+	minute := t.Minute()
+	second := t.Second()
+
+	// Safety bound: search at most 5 years (covers 4-year leap cycle + margin).
+	maxYear := year + 5
+
+	for iteration := 0; iteration < 25; iteration++ {
+		// Step 1: Year
+		if p.enableYears {
+			y, found := nextInSorted(p.sortedYears, year)
+			if !found || y > maxYear {
+				return time.Time{}
+			}
+			if y != year {
+				year = y
+				month = p.sortedMonths[0]
+				day = 1
+				hour = p.sortedHours[0]
+				minute = p.sortedMinutes[0]
+				second = p.firstSecond()
+			}
+		} else if year > maxYear {
+			return time.Time{}
+		}
+
+		// Step 2: Month
+		m, found := nextInSorted(p.sortedMonths, month)
+		if !found {
+			year++
+			month = p.sortedMonths[0]
+			day = 1
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+			continue
+		}
+		if m != month {
+			month = m
+			day = 1
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+		}
+
+		// Step 3: Day (special handling for L/W and OR logic)
+		lastDay := daysInMonth(year, time.Month(month))
+		if day > lastDay {
+			month++
+			if month > 12 {
+				month = 1
+				year++
+			}
+			day = 1
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+			continue
+		}
+		d, dayFound := p.nextValidDay(year, time.Month(month), day)
+		if !dayFound {
+			month++
+			if month > 12 {
+				month = 1
+				year++
+			}
+			day = 1
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+			continue
+		}
+		if d != day {
+			day = d
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+		}
+
+		// Step 4: Hour
+		h, found := nextInSorted(p.sortedHours, hour)
+		if !found {
+			day++
+			hour = p.sortedHours[0]
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+			continue
+		}
+		if h != hour {
+			hour = h
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+		}
+
+		// Step 5: Minute
+		mi, found := nextInSorted(p.sortedMinutes, minute)
+		if !found {
+			hour++
+			minute = p.sortedMinutes[0]
+			second = p.firstSecond()
+			continue
+		}
+		if mi != minute {
+			minute = mi
+			second = p.firstSecond()
+		}
+
+		// Step 6: Second (only when seconds precision is enabled)
 		if p.enableSeconds {
-			next = next.Add(time.Second).Truncate(time.Second)
-		} else {
-			next = next.Add(time.Minute).Truncate(time.Minute)
-		}
-		year := next.Year()
-		month := next.Month()
-		day := next.Day()
-		hour := next.Hour()
-		minute := next.Minute()
-		second := next.Second()
-		weekday := int(next.Weekday())
-
-		secondValid := !p.enableSeconds || len(p.seconds) == 0 || contains(p.seconds, second)
-
-		var dayOfMonthValid bool
-		for d := range p.dayOfMonth {
-			if d == 0 {
-				lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, next.Location()).Day()
-				if day == lastDay {
-					dayOfMonthValid = true
-					break
-				}
-			} else if d < 0 {
-				targetDay := -d
-				nearestWeekday := findNearestWeekday(year, month, targetDay, next.Location())
-				if day == nearestWeekday {
-					dayOfMonthValid = true
-					break
-				}
-			} else if day == d {
-				dayOfMonthValid = true
-				break
+			s, found := nextInSorted(p.sortedSeconds, second)
+			if !found {
+				minute++
+				second = p.sortedSeconds[0]
+				continue
 			}
+			second = s
 		}
 
-		var dayOfWeekValid bool
-		for w := range p.dayOfWeek {
-			if w < 0 {
-				targetWeekday := -w
-				lastWeekday := findLastWeekdayOfMonth(year, month, targetWeekday, next.Location())
-				if day == lastWeekday {
-					dayOfWeekValid = true
-					break
-				}
-			} else if weekday == w {
-				dayOfWeekValid = true
-				break
-			}
+		// Construct result and validate the date is real
+		// (e.g., Feb 30 would overflow to March in time.Date).
+		result := time.Date(year, time.Month(month), day, hour, minute, second, 0, p.location)
+		if result.Year() == year && result.Month() == time.Month(month) && result.Day() == day {
+			return result
 		}
-
-		// Standard cron behavior for dayOfMonth and dayOfWeek:
-		// - If both are wildcards (*): match any day (AND logic, both always true)
-		// - If one is wildcard, use the other for matching
-		// - If both are specified (non-wildcard): use OR logic (match either)
-		var dayValid bool
-		if p.dayOfMonthWildcard && p.dayOfWeekWildcard {
-			// Both wildcards: always valid
-			dayValid = true
-		} else if p.dayOfMonthWildcard {
-			// Only dayOfWeek specified
-			dayValid = dayOfWeekValid
-		} else if p.dayOfWeekWildcard {
-			// Only dayOfMonth specified
-			dayValid = dayOfMonthValid
-		} else {
-			// Both specified: use OR logic (standard cron behavior)
-			dayValid = dayOfMonthValid || dayOfWeekValid
+		// Date overflow: advance to next month.
+		month++
+		if month > 12 {
+			month = 1
+			year++
 		}
-
-		if dayValid && secondValid &&
-			(!p.enableYears || contains(p.years, year)) &&
-			contains(p.minutes, minute) &&
-			contains(p.hours, hour) &&
-			contains(p.months, int(month)) {
-			return next
-		}
+		day = 1
+		hour = p.sortedHours[0]
+		minute = p.sortedMinutes[0]
+		second = p.firstSecond()
 	}
 
-	// No valid time found within max iterations, return zero value.
-	// Callers should check for zero value using Time.IsZero().
 	return time.Time{}
 }
 
-func contains(m map[int]struct{}, value int) bool {
-	_, exists := m[value]
-	return exists
+// nextInSorted finds the smallest value >= val in a sorted slice.
+// Returns (value, true) if found, or (0, false) if val exceeds all elements.
+func nextInSorted(sorted []int, val int) (int, bool) {
+	idx := sort.SearchInts(sorted, val)
+	if idx < len(sorted) {
+		return sorted[idx], true
+	}
+	return 0, false
+}
+
+// firstSecond returns the first valid second value, or 0 if seconds are not enabled.
+func (p *CronParser) firstSecond() int {
+	if p.enableSeconds && len(p.sortedSeconds) > 0 {
+		return p.sortedSeconds[0]
+	}
+	return 0
+}
+
+// daysInMonth returns the number of days in the given month/year.
+func daysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+// nextValidDay finds the next day >= startDay that satisfies the dayOfMonth/dayOfWeek
+// constraints in the given year/month. Returns (day, true) or (0, false) if none found.
+func (p *CronParser) nextValidDay(year int, month time.Month, startDay int) (int, bool) {
+	lastDay := daysInMonth(year, month)
+	for day := startDay; day <= lastDay; day++ {
+		if p.isDayValid(year, month, day) {
+			return day, true
+		}
+	}
+	return 0, false
+}
+
+// isDayValid checks if a day satisfies the combined dayOfMonth/dayOfWeek constraints,
+// applying standard cron OR/AND logic.
+func (p *CronParser) isDayValid(year int, month time.Month, day int) bool {
+	if p.dayOfMonthWildcard && p.dayOfWeekWildcard {
+		return true
+	}
+
+	domValid := p.isDayOfMonthMatch(year, month, day)
+	dowValid := p.isDayOfWeekMatch(year, month, day)
+
+	if p.dayOfMonthWildcard {
+		return dowValid
+	}
+	if p.dayOfWeekWildcard {
+		return domValid
+	}
+	// Both specified: OR logic (standard cron behavior).
+	return domValid || dowValid
+}
+
+// isDayOfMonthMatch checks if day matches the dayOfMonth field,
+// handling L (last day) and W (nearest weekday) special values.
+func (p *CronParser) isDayOfMonthMatch(year int, month time.Month, day int) bool {
+	for d := range p.dayOfMonth {
+		switch {
+		case d == 0: // L: last day of month
+			if day == daysInMonth(year, month) {
+				return true
+			}
+		case d < 0: // W: nearest weekday to day -d
+			if day == findNearestWeekday(year, month, -d, p.location) {
+				return true
+			}
+		default:
+			if day == d {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isDayOfWeekMatch checks if day matches the dayOfWeek field,
+// handling nL (last nth weekday of month) special values.
+func (p *CronParser) isDayOfWeekMatch(year int, month time.Month, day int) bool {
+	weekday := int(time.Date(year, month, day, 0, 0, 0, 0, p.location).Weekday())
+	for w := range p.dayOfWeek {
+		if w < 0 {
+			targetWeekday := -w
+			lastDay := findLastWeekdayOfMonth(year, month, targetWeekday, p.location)
+			if day == lastDay {
+				return true
+			}
+		} else if weekday == w {
+			return true
+		}
+	}
+	return false
 }
 
 // findNearestWeekday finds the nearest weekday (Monday to Friday) to the target day in the given month and year.

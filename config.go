@@ -3,7 +3,7 @@ package golitecron
 type TaskConfig struct {
 	ID            string `yaml:"id" json:"id"`
 	CronExpr      string `yaml:"cron_expr" json:"cron_expr"`
-	Timeout       int64  `yaml:"timeout" json:"timeout"`
+	Timeout       string `yaml:"timeout" json:"timeout"`
 	Retry         int    `yaml:"retry" json:"retry"`
 	Location      string `yaml:"location" json:"location"`
 	EnableSeconds bool   `yaml:"enable_seconds" json:"enable_seconds"`

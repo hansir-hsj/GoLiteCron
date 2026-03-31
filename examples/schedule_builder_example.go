@@ -36,7 +36,7 @@ func main() {
 	}
 
 	// 每分钟执行一次
-	err = scheduler.Every().Minutes().Do(printJob("Task runs every minutes"))
+	err = scheduler.Every().Minutes().Do(printJob("Task runs every minute"))
 	if err != nil {
 		fmt.Printf("Error adding minute task: %v\n", err)
 		return

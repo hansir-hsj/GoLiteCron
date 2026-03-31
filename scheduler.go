@@ -3,6 +3,7 @@ package golitecron
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -20,8 +21,25 @@ const (
 	StorageTypeTimeWheel
 )
 
+// Logger defines the logging interface used by the scheduler.
+// Implementations can write to any destination (os.Stderr, files, syslog, etc.).
+// The default implementation writes to os.Stderr.
+type Logger interface {
+	Printf(format string, args ...any)
+}
+
+// stdLogger wraps Go's standard log.Logger to implement the Logger interface.
+type stdLogger struct {
+	*log.Logger
+}
+
+func (l *stdLogger) Printf(format string, args ...any) {
+	l.Logger.Printf(format, args...)
+}
+
 type Scheduler struct {
 	taskStorage TaskStorage
+	logger      Logger
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
 	running     int32
@@ -31,20 +49,28 @@ type Scheduler struct {
 
 func NewScheduler(storageType ...StorageType) *Scheduler {
 	var taskStorage TaskStorage
-	if len(storageType) == 0 {
-		storageType = append(storageType, StorageTypeHeap)
+	st := StorageTypeHeap
+	if len(storageType) > 0 {
+		st = storageType[0]
 	}
-	switch storageType[0] {
+	switch st {
 	case StorageTypeTimeWheel:
 		taskStorage = NewDynamicTimeWheel()
-	case StorageTypeHeap:
-		fallthrough
 	default:
 		taskStorage = NewTaskQueue()
 	}
 	return &Scheduler{
 		taskStorage: taskStorage,
+		logger:      &stdLogger{Logger: log.New(os.Stderr, "", log.LstdFlags)},
 		stopChan:    make(chan struct{}),
+	}
+}
+
+// WithLogger sets a custom logger for the scheduler.
+// It must be called before Start().
+func (s *Scheduler) WithLogger(l Logger) {
+	if l != nil {
+		s.logger = l
 	}
 }
 
@@ -66,8 +92,12 @@ func (s *Scheduler) LoadTasksFromConfig(config *Config) error {
 		if taskConfig.EnableYears {
 			opts = append(opts, WithYears())
 		}
-		if taskConfig.Timeout > 0 {
-			opts = append(opts, WithTimeout(time.Duration(taskConfig.Timeout)*time.Millisecond))
+		if taskConfig.Timeout != "" {
+			timeout, err := time.ParseDuration(taskConfig.Timeout)
+			if err != nil {
+				return fmt.Errorf("invalid timeout duration %q for task %s: %w", taskConfig.Timeout, taskConfig.ID, err)
+			}
+			opts = append(opts, WithTimeout(timeout))
 		}
 		if taskConfig.Retry > 0 {
 			opts = append(opts, WithRetry(taskConfig.Retry))
@@ -150,6 +180,11 @@ func (s *Scheduler) RemoveTask(task *Task) bool {
 	// This is important even if task is currently executing (not in storage)
 	atomic.StoreInt32(&task.Removed, 1)
 
+	// Hold taskMu for TaskExist + RemoveTask atomicity,
+	// preventing races with AddTask and internal reschedule.
+	s.taskMu.Lock()
+	defer s.taskMu.Unlock()
+
 	if !s.taskStorage.TaskExist(task.ID) {
 		return false
 	}
@@ -208,7 +243,7 @@ func (s *Scheduler) run() {
 					defer func() {
 						s.wg.Done()
 						if r := recover(); r != nil {
-							fmt.Fprintf(os.Stderr, "Recovered from panic in task %s: %v\n", t.ID, r)
+							s.logger.Printf("Recovered from panic in task %s: %v\n", t.ID, r)
 						}
 					}()
 
@@ -226,15 +261,15 @@ func (s *Scheduler) run() {
 						if timeout > 0 {
 							ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
-						done := make(chan error, 1)
-						go func() {
-							defer func() {
-								if r := recover(); r != nil {
-									done <- fmt.Errorf("panic in task %s: %v", t.ID, r)
-								}
+							done := make(chan error, 1)
+							go func() {
+								defer func() {
+									if r := recover(); r != nil {
+										done <- fmt.Errorf("panic in task %s: %v", t.ID, r)
+									}
+								}()
+								done <- t.Job.Execute(ctx)
 							}()
-							done <- t.Job.Execute(ctx)
-						}()
 
 							select {
 							case err = <-done:
@@ -250,7 +285,7 @@ func (s *Scheduler) run() {
 							// Note: The timed-out goroutine may still be running (Go limitation).
 							// Recommendation: Job implementations should support context cancellation.
 							if timedOut {
-								fmt.Fprintf(os.Stderr, "Task %s timed out, skipping retries to prevent goroutine accumulation\n", t.ID)
+								s.logger.Printf("Task %s timed out, skipping retries to prevent goroutine accumulation\n", t.ID)
 								break
 							}
 						} else {
@@ -258,7 +293,7 @@ func (s *Scheduler) run() {
 						}
 
 						if err != nil {
-							fmt.Fprintf(os.Stderr, "Error executing task %s: %v (retry %d)\n", t.ID, err, i)
+							s.logger.Printf("Error executing task %s: %v (retry %d)\n", t.ID, err, i)
 						} else {
 							break
 						}
@@ -270,17 +305,12 @@ func (s *Scheduler) run() {
 
 					// Check if a valid next run time was found
 					if nextRunTime.IsZero() {
-						fmt.Fprintf(os.Stderr, "Task %s: failed to calculate next run time, task will not be rescheduled\n", t.ID)
+						s.logger.Printf("Task %s: failed to calculate next run time, task will not be rescheduled\n", t.ID)
 						return
 					}
 
 					// Check if scheduler has been stopped
 					if atomic.LoadInt32(&s.running) == 0 {
-						return
-					}
-
-					// Check if task was explicitly removed during execution
-					if atomic.LoadInt32(&t.Removed) == 1 {
 						return
 					}
 
@@ -293,7 +323,15 @@ func (s *Scheduler) run() {
 						Running:     0,
 					}
 
+					// Hold taskMu for Removed check + AddTask atomicity,
+					// preventing races with external AddTask/RemoveTask.
+					s.taskMu.Lock()
+					if atomic.LoadInt32(&t.Removed) == 1 {
+						s.taskMu.Unlock()
+						return
+					}
 					s.taskStorage.AddTask(updateTask)
+					s.taskMu.Unlock()
 				}(task)
 			}
 		}
