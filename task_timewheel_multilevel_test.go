@@ -323,3 +323,109 @@ func TestTimeWheel_TaskExistAfterMultipleTicks(t *testing.T) {
 		t.Error("expected future task to persist across ticks")
 	}
 }
+
+// TestTimeWheel_WithExpectedTasks tests preallocation with expected tasks option
+func TestTimeWheel_WithExpectedTasks(t *testing.T) {
+	tw := NewDynamicTimeWheel(WithExpectedTasks(1000))
+
+	if tw.expectedTasks != 1000 {
+		t.Errorf("expected expectedTasks to be 1000, got %d", tw.expectedTasks)
+	}
+
+	// Verify basic functionality still works
+	now := time.Now().UTC()
+	for i := 0; i < 100; i++ {
+		task := &Task{
+			ID:          "task-" + string(rune('A'+i%26)) + string(rune('0'+i%10)),
+			NextRunTime: now.Add(time.Duration(i) * time.Second),
+		}
+		tw.AddTask(task)
+	}
+
+	tasks := tw.GetTasks()
+	if len(tasks) < 50 {
+		t.Errorf("expected at least 50 tasks, got %d", len(tasks))
+	}
+}
+
+// TestTimeWheel_WithTickDuration tests tick duration option
+func TestTimeWheel_WithTickDuration(t *testing.T) {
+	customTick := 200 * time.Millisecond
+	tw := NewDynamicTimeWheel(WithTickDuration(customTick))
+
+	if tw.baseTickDuration != customTick {
+		t.Errorf("expected baseTickDuration %v, got %v", customTick, tw.baseTickDuration)
+	}
+}
+
+// TestTimeWheel_CombinedOptions tests multiple options together
+func TestTimeWheel_CombinedOptions(t *testing.T) {
+	customTick := 100 * time.Millisecond
+	tw := NewDynamicTimeWheel(
+		WithExpectedTasks(5000),
+		WithTickDuration(customTick),
+	)
+
+	if tw.expectedTasks != 5000 {
+		t.Errorf("expected expectedTasks to be 5000, got %d", tw.expectedTasks)
+	}
+	if tw.baseTickDuration != customTick {
+		t.Errorf("expected baseTickDuration %v, got %v", customTick, tw.baseTickDuration)
+	}
+}
+
+// TestTimeWheel_BackwardCompatibility tests backward compatibility with duration argument
+func TestTimeWheel_BackwardCompatibility(t *testing.T) {
+	// Old style: pass duration directly
+	tw := NewDynamicTimeWheel(100 * time.Millisecond)
+
+	if tw.baseTickDuration != 100*time.Millisecond {
+		t.Errorf("expected baseTickDuration 100ms, got %v", tw.baseTickDuration)
+	}
+
+	// New style: use option function
+	tw2 := NewDynamicTimeWheel(WithTickDuration(200 * time.Millisecond))
+
+	if tw2.baseTickDuration != 200*time.Millisecond {
+		t.Errorf("expected baseTickDuration 200ms, got %v", tw2.baseTickDuration)
+	}
+}
+
+// TestTimeWheel_CalculateLevelCapacity tests capacity distribution across levels
+func TestTimeWheel_CalculateLevelCapacity(t *testing.T) {
+	tw := NewDynamicTimeWheel(WithExpectedTasks(1000))
+
+	// Level 0 should get 70%
+	level0Cap := tw.calculateLevelCapacity(0)
+	if level0Cap != 700 {
+		t.Errorf("expected level 0 capacity 700, got %d", level0Cap)
+	}
+
+	// Level 1 should get 20%
+	level1Cap := tw.calculateLevelCapacity(1)
+	if level1Cap != 200 {
+		t.Errorf("expected level 1 capacity 200, got %d", level1Cap)
+	}
+
+	// Level 2+ should get 10%
+	level2Cap := tw.calculateLevelCapacity(2)
+	if level2Cap != 100 {
+		t.Errorf("expected level 2 capacity 100, got %d", level2Cap)
+	}
+}
+
+// TestTimeWheel_ZeroExpectedTasks tests behavior with zero expected tasks
+func TestTimeWheel_ZeroExpectedTasks(t *testing.T) {
+	tw := NewDynamicTimeWheel(WithExpectedTasks(0))
+
+	// Should still work normally
+	task := &Task{
+		ID:          "zero-expected",
+		NextRunTime: time.Now().UTC().Add(1 * time.Hour),
+	}
+	tw.AddTask(task)
+
+	if !tw.TaskExist("zero-expected") {
+		t.Error("expected task to exist")
+	}
+}

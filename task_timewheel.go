@@ -19,7 +19,7 @@ type entry struct {
 type LevelTimeWheel struct {
 	tickDuration time.Duration
 	wheelSize    int
-	slots        []*list.List
+	slots        []*list.List // Lazily initialized: nil until first task added to slot
 	tasks        map[string]entry
 	currentSlot  int
 	lastTickTime time.Time
@@ -28,34 +28,115 @@ type LevelTimeWheel struct {
 
 type DynamicTimeWheel struct {
 	baseTickDuration time.Duration
+	expectedTasks    int // Expected number of tasks for map preallocation
 	levels           []*LevelTimeWheel
 	mu               sync.RWMutex
 }
 
-func NewDynamicTimeWheel(baseTickDuration ...time.Duration) *DynamicTimeWheel {
-	tickDuration := BaseTickDuration
-	if len(baseTickDuration) > 0 {
-		tickDuration = baseTickDuration[0]
-	}
-	return &DynamicTimeWheel{
-		baseTickDuration: tickDuration,
-		levels:           []*LevelTimeWheel{newLevelTimeWheel(tickDuration, DefaultWheelSize)},
+// TimeWheelOption is a function that configures a DynamicTimeWheel.
+type TimeWheelOption func(*DynamicTimeWheel)
+
+// WithExpectedTasks sets the expected number of tasks for map preallocation.
+// This helps reduce map resizing overhead when adding many tasks.
+// The capacity is distributed across levels, with lower levels getting more capacity.
+func WithExpectedTasks(n int) TimeWheelOption {
+	return func(dtw *DynamicTimeWheel) {
+		if n > 0 {
+			dtw.expectedTasks = n
+		}
 	}
 }
 
-func newLevelTimeWheel(tick time.Duration, size int) *LevelTimeWheel {
-	slots := make([]*list.List, size)
-	for i := range slots {
-		slots[i] = list.New()
+// WithTickDuration sets the base tick duration for the time wheel.
+// Default is 1 second.
+func WithTickDuration(d time.Duration) TimeWheelOption {
+	return func(dtw *DynamicTimeWheel) {
+		if d > 0 {
+			dtw.baseTickDuration = d
+		}
 	}
+}
+
+// NewDynamicTimeWheel creates a new dynamic time wheel.
+// It accepts optional TimeWheelOption functions or a single time.Duration for backward compatibility.
+func NewDynamicTimeWheel(args ...any) *DynamicTimeWheel {
+	dtw := &DynamicTimeWheel{
+		baseTickDuration: BaseTickDuration,
+		expectedTasks:    0,
+	}
+
+	// Parse arguments for backward compatibility and new option pattern
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case time.Duration:
+			dtw.baseTickDuration = v
+		case TimeWheelOption:
+			v(dtw)
+		}
+	}
+
+	// Calculate initial map capacity for level 0
+	// Level 0 typically holds most tasks (short-term tasks)
+	initialCap := dtw.calculateLevelCapacity(0)
+	dtw.levels = []*LevelTimeWheel{newLevelTimeWheel(dtw.baseTickDuration, DefaultWheelSize, initialCap)}
+
+	return dtw
+}
+
+// calculateLevelCapacity returns the map preallocation capacity for a given level.
+// Lower levels get more capacity as they hold more tasks.
+// Level 0: 70% of expected tasks
+// Level 1: 20% of expected tasks
+// Level 2+: 10% of expected tasks (split among remaining levels)
+func (dtw *DynamicTimeWheel) calculateLevelCapacity(level int) int {
+	if dtw.expectedTasks <= 0 {
+		return 0 // Let Go use default map capacity
+	}
+
+	switch level {
+	case 0:
+		return dtw.expectedTasks * 70 / 100
+	case 1:
+		return dtw.expectedTasks * 20 / 100
+	default:
+		return dtw.expectedTasks * 10 / 100
+	}
+}
+
+// newLevelTimeWheel creates a new level time wheel.
+// Slots are lazily initialized - only allocate the pointer array, not the lists.
+// mapCapacity specifies the initial capacity for the tasks map (0 means use default).
+func newLevelTimeWheel(tick time.Duration, size int, mapCapacity int) *LevelTimeWheel {
+	var tasks map[string]entry
+	if mapCapacity > 0 {
+		tasks = make(map[string]entry, mapCapacity)
+	} else {
+		tasks = make(map[string]entry)
+	}
+
 	return &LevelTimeWheel{
 		tickDuration: tick,
 		wheelSize:    size,
-		slots:        slots,
-		tasks:        make(map[string]entry),
+		slots:        make([]*list.List, size), // Only allocate pointer array, slots are nil
+		tasks:        tasks,
 		currentSlot:  0,
 		lastTickTime: time.Now().UTC(),
 	}
+}
+
+// getOrCreateSlot returns the slot at the given index, creating it if necessary.
+// Caller must hold ltw.mu (write lock) when calling this method.
+func (ltw *LevelTimeWheel) getOrCreateSlot(index int) *list.List {
+	if ltw.slots[index] == nil {
+		ltw.slots[index] = list.New()
+	}
+	return ltw.slots[index]
+}
+
+// getSlot returns the slot at the given index, or nil if not initialized.
+// Safe to call with read lock.
+func (ltw *LevelTimeWheel) getSlot(index int) *list.List {
+	return ltw.slots[index]
 }
 
 func (dtw *DynamicTimeWheel) maxCoverage() time.Duration {
@@ -116,7 +197,9 @@ func (dtw *DynamicTimeWheel) maxCoverageLocked() time.Duration {
 func (dtw *DynamicTimeWheel) expandLevelLocked() {
 	lastLevel := dtw.levels[len(dtw.levels)-1]
 	newTick := lastLevel.tickDuration * time.Duration(lastLevel.wheelSize)
-	newLevel := newLevelTimeWheel(newTick, DefaultWheelSize)
+	newLevelIndex := len(dtw.levels)
+	mapCapacity := dtw.calculateLevelCapacity(newLevelIndex)
+	newLevel := newLevelTimeWheel(newTick, DefaultWheelSize, mapCapacity)
 	dtw.levels = append(dtw.levels, newLevel)
 }
 
@@ -184,12 +267,17 @@ func (dtw *DynamicTimeWheel) Tick(now time.Time) []*Task {
 	return readyTasks
 }
 
-// Helper method to collect expired tasks from current slot
+// collectExpiredTasksFromCurrentSlot collects expired tasks from the current slot.
+// Caller must hold ltw.mu.
 func (ltw *LevelTimeWheel) collectExpiredTasksFromCurrentSlot(now time.Time) []*Task {
-	var expiredTasks []*Task
-	slot := ltw.slots[ltw.currentSlot]
+	slot := ltw.getSlot(ltw.currentSlot)
+	if slot == nil {
+		return nil // Slot not initialized, no tasks
+	}
 
+	var expiredTasks []*Task
 	var elementsToRemove []*list.Element
+
 	for e := slot.Front(); e != nil; e = e.Next() {
 		task := e.Value.(*Task)
 		if !task.NextRunTime.UTC().After(now) {
@@ -206,12 +294,16 @@ func (ltw *LevelTimeWheel) collectExpiredTasksFromCurrentSlot(now time.Time) []*
 	return expiredTasks
 }
 
-// Helper method to process slot tick
+// processSlotTick processes the current slot and returns expired and remaining tasks.
+// Caller must hold ltw.mu.
 func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
+	slot := ltw.getSlot(ltw.currentSlot)
+	if slot == nil {
+		return nil, nil // Slot not initialized, no tasks
+	}
+
 	var expiredTasks []*Task
 	var remainingTasks []*Task
-
-	slot := ltw.slots[ltw.currentSlot]
 
 	// Collect expired tasks
 	var elementsToRemove []*list.Element
@@ -236,7 +328,7 @@ func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
 		delete(ltw.tasks, task.ID)
 	}
 
-	// Clear the slot
+	// Clear the slot (reinitialize to empty list)
 	slot.Init()
 
 	return expiredTasks, remainingTasks
@@ -245,8 +337,13 @@ func (ltw *LevelTimeWheel) processSlotTick(now time.Time) ([]*Task, []*Task) {
 // collectAllTasksFromSlot removes and returns ALL tasks from the given slot.
 // Used for intermediate slots that have been completely skipped during tick advancement;
 // their time window has fully elapsed so all contained tasks are overdue.
+// Caller must hold ltw.mu.
 func (ltw *LevelTimeWheel) collectAllTasksFromSlot(slotIndex int) []*Task {
-	slot := ltw.slots[slotIndex]
+	slot := ltw.getSlot(slotIndex)
+	if slot == nil {
+		return nil // Slot not initialized, no tasks
+	}
+
 	var tasks []*Task
 	for e := slot.Front(); e != nil; e = e.Next() {
 		task := e.Value.(*Task)
@@ -334,6 +431,10 @@ func (dtw *DynamicTimeWheel) GetTasks() []*Task {
 	for _, level := range dtw.levels {
 		level.mu.RLock()
 		for _, slot := range level.slots {
+			// Skip uninitialized slots
+			if slot == nil {
+				continue
+			}
 			for e := slot.Front(); e != nil; e = e.Next() {
 				tasks = append(tasks, e.Value.(*Task))
 			}
@@ -364,7 +465,9 @@ func (ltw *LevelTimeWheel) addTaskLocked(task *Task) {
 		ltw.removeTask(task.ID)
 	}
 
-	e := ltw.slots[slotIndex].PushBack(task)
+	// Use getOrCreateSlot to lazily initialize the slot
+	slot := ltw.getOrCreateSlot(slotIndex)
+	e := slot.PushBack(task)
 	ltw.tasks[task.ID] = entry{
 		SlotIndex: slotIndex,
 		Element:   e,
@@ -376,6 +479,10 @@ func (ltw *LevelTimeWheel) removeTask(taskID string) {
 	if !ok {
 		return
 	}
-	ltw.slots[entry.SlotIndex].Remove(entry.Element)
+	// Slot must exist if task exists in tasks map
+	slot := ltw.slots[entry.SlotIndex]
+	if slot != nil {
+		slot.Remove(entry.Element)
+	}
 	delete(ltw.tasks, taskID)
 }
