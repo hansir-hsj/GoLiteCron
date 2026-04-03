@@ -70,34 +70,42 @@ select {}
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Scheduler                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ Chain API   │  │ Cron Parser │  │ Config Loader       │  │
-│  │ Every().Do()│  │ 5/6/7 fields│  │ YAML / JSON         │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         └────────────────┼───────────────────┬┘             │
-│                          ▼                   │              │
-│                   ┌─────────────┐            │              │
-│                   │    Task     │◄───────────┘              │
-│                   │ ID, Job,    │                           │
-│                   │ NextRunTime │                           │
-│                   └──────┬──────┘                           │
-│                          ▼                                  │
-│         ┌────────────────┴────────────────┐                 │
-│         ▼                                 ▼                 │
-│  ┌─────────────┐                   ┌─────────────┐          │
-│  │    Heap     │                   │  TimeWheel  │          │
-│  │  (Default)  │                   │   (O(1))    │          │
-│  │  O(log n)   │                   │  Multi-level│          │
-│  └─────────────┘                   └─────────────┘          │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                   Executor                          │    │
-│  │  • Timeout Control  • Retry Logic  • Panic Recovery │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Scheduler["📦 Scheduler"]
+        direction TB
+        
+        subgraph Input["Input Layer"]
+            direction LR
+            ChainAPI["⛓️ Chain API<br/><code>Every().Do()</code>"]
+            CronParser["⏰ Cron Parser<br/><i>5/6/7 fields</i>"]
+            ConfigLoader["📄 Config Loader<br/><i>YAML / JSON</i>"]
+        end
+        
+        Task["📋 Task<br/><code>ID, Job, NextRunTime</code>"]
+        
+        subgraph Storage["Storage Backend"]
+            direction LR
+            Heap["🗂️ Heap<br/><i>Default, O(log n)</i>"]
+            TimeWheel["⚙️ TimeWheel<br/><i>O(1), Multi-level</i>"]
+        end
+        
+        Executor["🚀 Executor<br/><i>Timeout Control · Retry Logic · Panic Recovery</i>"]
+    end
+    
+    ChainAPI --> Task
+    CronParser --> Task
+    ConfigLoader --> Task
+    Task --> Heap
+    Task --> TimeWheel
+    Heap --> Executor
+    TimeWheel --> Executor
+
+    style Scheduler fill:#f8f9fa,stroke:#343a40,stroke-width:2px
+    style Task fill:#e7f3ff,stroke:#0066cc,stroke-width:2px
+    style Executor fill:#d4edda,stroke:#28a745,stroke-width:2px
+    style Heap fill:#fff3cd,stroke:#ffc107,stroke-width:1px
+    style TimeWheel fill:#fff3cd,stroke:#ffc107,stroke-width:1px
 ```
 
 ---
