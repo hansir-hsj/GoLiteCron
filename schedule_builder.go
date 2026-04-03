@@ -18,7 +18,7 @@ type ScheduleBuilder struct {
 	secondsEnabled bool // Track if WithSeconds was already added
 }
 
-// Every 开始一个新的调度构建器
+// Every starts a new schedule builder with an optional interval.
 func (s *Scheduler) Every(intervals ...int) *ScheduleBuilder {
 	interval := 1
 	if len(intervals) > 0 {
@@ -30,7 +30,6 @@ func (s *Scheduler) Every(intervals ...int) *ScheduleBuilder {
 	}
 }
 
-// 时间单位方法
 func (sb *ScheduleBuilder) Second() *ScheduleBuilder {
 	sb.unit = "second"
 	return sb
@@ -91,7 +90,6 @@ func (sb *ScheduleBuilder) Months() *ScheduleBuilder {
 	return sb
 }
 
-// 星期几方法
 func (sb *ScheduleBuilder) Monday() *ScheduleBuilder {
 	sb.unit = "weekday"
 	sb.weekday = time.Monday
@@ -134,13 +132,12 @@ func (sb *ScheduleBuilder) Sunday() *ScheduleBuilder {
 	return sb
 }
 
-// At 指定具体时间，格式支持 "HH:MM" 或 "HH:MM:SS"
+// At specifies the time of day (format: "HH:MM" or "HH:MM:SS").
 func (sb *ScheduleBuilder) At(timeStr string) *ScheduleBuilder {
 	sb.timeSpec = timeStr
 	return sb
 }
 
-// 选项方法，用于链式配置
 func (sb *ScheduleBuilder) WithTimeout(timeout time.Duration) *ScheduleBuilder {
 	sb.options = append(sb.options, WithTimeout(timeout))
 	return sb
@@ -169,7 +166,7 @@ func (sb *ScheduleBuilder) WithYears() *ScheduleBuilder {
 	return sb
 }
 
-// Do 执行任务，支持多种参数类型
+// Do registers the job. Accepts func(), func() error, or Job interface.
 func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 	cronExpr, err := sb.buildCronExpression()
 	if err != nil {
@@ -179,14 +176,12 @@ func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 	var wrappedJob Job
 	var id string
 
-	// 生成任务ID
 	if len(taskID) > 0 && taskID[0] != "" {
 		id = taskID[0]
 	} else {
 		id = sb.generateTaskID()
 	}
 
-	// 根据job类型进行包装
 	var wrapErr error
 	switch j := job.(type) {
 	case func() error:
@@ -197,7 +192,6 @@ func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 			return nil
 		})
 	case Job:
-		// 如果传入的是Job接口，需要重新包装以使用新的ID
 		wrappedJob, wrapErr = WrapJob(id, j.Execute)
 	default:
 		return fmt.Errorf("unsupported job type: %T", job)
@@ -210,7 +204,7 @@ func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 	return sb.scheduler.AddTask(cronExpr, wrappedJob, sb.options...)
 }
 
-// buildCronExpression 根据配置构建cron表达式
+// buildCronExpression builds a cron expression from the builder configuration.
 func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 	var cronExpr string
 
@@ -319,10 +313,10 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 	return cronExpr, nil
 }
 
-// parseTimeSpec 解析时间规格 "HH:MM" 或 "HH:MM:SS"
+// parseTimeSpec parses "HH:MM" or "HH:MM:SS" format.
 func (sb *ScheduleBuilder) parseTimeSpec() (hour, minute, second int, err error) {
 	parts := strings.Split(sb.timeSpec, ":")
-	second = -1 // 默认不指定秒
+	second = -1
 
 	if len(parts) < 2 || len(parts) > 3 {
 		return 0, 0, -1, fmt.Errorf("invalid time format: %s, expected HH:MM or HH:MM:SS", sb.timeSpec)
@@ -348,7 +342,7 @@ func (sb *ScheduleBuilder) parseTimeSpec() (hour, minute, second int, err error)
 	return hour, minute, second, nil
 }
 
-// generateTaskID 生成默认任务ID
+// generateTaskID generates a default task ID based on the schedule.
 func (sb *ScheduleBuilder) generateTaskID() string {
 	switch sb.unit {
 	case "second":

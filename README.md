@@ -1,24 +1,48 @@
 # GoLiteCron
 
+```
+   ____       _     _ _        ____                  
+  / ___| ___ | |   (_) |_ ___ / ___|_ __ ___  _ __  
+ | |  _ / _ \| |   | | __/ _ \ |   | '__/ _ \| '_ \ 
+ | |_| | (_) | |___| | ||  __/ |___| | | (_) | | | |
+  \____|\___/|_____|_|\__\___|\____|_|  \___/|_| |_|
+```
+
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-blue)](https://go.dev/)
+[![GoDoc](https://pkg.go.dev/badge/github.com/hansir-hsj/GoLiteCron.svg)](https://pkg.go.dev/github.com/hansir-hsj/GoLiteCron)
+[![Go Report Card](https://goreportcard.com/badge/github.com/hansir-hsj/GoLiteCron)](https://goreportcard.com/report/github.com/hansir-hsj/GoLiteCron)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen.svg)](.)
 
-A lightweight, high-performance cron job scheduler for Go.
+A lightweight, high-performance cron job scheduler for Go with fluent API, dual storage backends, and built-in timeout/retry.
 
-[中文文档](docs/readme.zh.md)
+[中文文档](docs/readme.zh.md) | [Getting Started](docs/getting-started.md) | [API Reference](docs/api-reference.md)
 
-## Features
+---
 
-| Feature | Description |
-|---------|-------------|
-| 🕐 Cron Expressions | Standard 5-field, 6-field (with seconds), 7-field (with years) |
-| 🔗 Chain API | Fluent API: `scheduler.Every(10).Seconds().Do(job)` |
-| ⏱️ Timeout & Retry | Built-in timeout control and automatic retry |
-| 🌍 Time Zones | Full timezone support for task execution |
-| 📦 Storage Backends | TimeWheel (high performance) or Heap (simple) |
-| 📄 Config Files | Load tasks from YAML/JSON configuration |
-| 🛡️ Panic Recovery | Automatic recovery from panicked tasks |
+## Why GoLiteCron?
+
+| Feature | GoLiteCron | robfig/cron |
+|---------|------------|-------------|
+| **Fluent API** | `Every(10).Seconds().Do(fn)` | Not supported |
+| **Storage Backends** | Heap + TimeWheel | Heap only |
+| **Timeout & Retry** | Built-in | Manual implementation |
+| **Config Files** | YAML / JSON | Not supported |
+| **Cron Fields** | 5/6/7 fields (with years) | 5/6 fields |
+| **Sequential Next() 100x** | **13.8ms** | 121ms (**8.8x slower**) |
+
+### Performance Comparison (vs robfig/cron)
+
+| Benchmark | GoLiteCron | robfig/cron | Winner |
+|-----------|------------|-------------|--------|
+| Next() - Minutely | **79 ns** | 196 ns | GoLiteCron **2.5x** |
+| Next() - Sequential 100 calls | **13.8 ms** | 121 ms | GoLiteCron **8.8x** |
+| Next() - Simple | 111 ns | 119 ns | GoLiteCron |
+| Tick 1000 tasks (10 ready) | **5.5 µs** | - | Heap backend |
+
+> Benchmarks run on Apple M4, Go 1.23. See [benchmark/](benchmark/) for details.
+
+---
 
 ## Installation
 
@@ -29,36 +53,57 @@ go get -u github.com/hansir-hsj/GoLiteCron
 ## Quick Start
 
 ```go
-package main
+scheduler := cron.NewScheduler()
 
-import (
-    "fmt"
-    cron "github.com/hansir-hsj/GoLiteCron"
-)
+// Fluent API
+scheduler.Every(10).Seconds().Do(func() { fmt.Println("tick") })
 
-func main() {
-    scheduler := cron.NewScheduler()
+// Cron expression
+scheduler.AddTask("*/5 * * * *", cron.WrapJob("job-1", myFunc))
 
-    // Chain API (recommended)
-    scheduler.Every(10).Seconds().Do(func() {
-        fmt.Println("runs every 10 seconds")
-    })
-
-    // Cron expression
-    scheduler.AddTask("*/5 * * * *", cron.WrapJob("five-min", func() error {
-        fmt.Println("runs every 5 minutes")
-        return nil
-    }))
-
-    scheduler.Start()
-    defer scheduler.Stop()
-    select {} // keep running
-}
+scheduler.Start()
+defer scheduler.Stop()
+select {}
 ```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Scheduler                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │ Chain API   │  │ Cron Parser │  │ Config Loader       │  │
+│  │ Every().Do()│  │ 5/6/7 fields│  │ YAML / JSON         │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+│         └────────────────┼───────────────────┬┘             │
+│                          ▼                   │              │
+│                   ┌─────────────┐            │              │
+│                   │    Task     │◄───────────┘              │
+│                   │ ID, Job,    │                           │
+│                   │ NextRunTime │                           │
+│                   └──────┬──────┘                           │
+│                          ▼                                  │
+│         ┌────────────────┴────────────────┐                 │
+│         ▼                                 ▼                 │
+│  ┌─────────────┐                   ┌─────────────┐          │
+│  │    Heap     │                   │  TimeWheel  │          │
+│  │  (Default)  │                   │   (O(1))    │          │
+│  │  O(log n)   │                   │  Multi-level│          │
+│  └─────────────┘                   └─────────────┘          │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                   Executor                          │    │
+│  │  • Timeout Control  • Retry Logic  • Panic Recovery │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## Cron Expression
 
-### Standard Format (5 fields)
 ```
 ┌───────────── minute (0-59)
 │ ┌───────────── hour (0-23)
@@ -68,38 +113,15 @@ func main() {
 * * * * *
 ```
 
-### Extended Format (6 fields, requires `WithSeconds()`)
-```
-┌───────────── second (0-59)
-│ ┌───────────── minute (0-59)
-│ │ ┌───────────── hour (0-23)
-│ │ │ ┌───────────── day of month (1-31)
-│ │ │ │ ┌───────────── month (1-12)
-│ │ │ │ │ ┌───────────── day of week (0-6)
-* * * * * *
-```
+**Special characters:** `*` (any) · `,` (list) · `-` (range) · `/` (step) · `L` (last) · `W` (weekday)
 
-### Special Characters
+**Macros:** `@yearly` · `@monthly` · `@weekly` · `@daily` · `@hourly`
 
-| Char | Description | Example |
-|------|-------------|---------|
-| `*` | Any value | `* * * * *` every minute |
-| `,` | List | `1,15 * * * *` minute 1 and 15 |
-| `-` | Range | `1-5 * * * *` minutes 1-5 |
-| `/` | Step | `*/10 * * * *` every 10 minutes |
-| `L` | Last | `0 0 L * *` last day of month |
-| `W` | Weekday | `0 0 15W * *` nearest weekday to 15th |
+**Extended:** 6 fields with seconds (`WithSeconds()`), 7 fields with years (`WithYears()`)
 
-### Predefined Macros
+> See [Getting Started](docs/getting-started.md#cron-expressions) for detailed examples.
 
-| Macro | Equivalent | Description |
-|-------|------------|-------------|
-| `@yearly` | `0 0 1 1 *` | Once a year (Jan 1) |
-| `@monthly` | `0 0 1 * *` | Once a month (1st) |
-| `@weekly` | `0 0 * * 0` | Once a week (Sunday) |
-| `@daily` | `0 0 * * *` | Once a day (midnight) |
-| `@hourly` | `0 * * * *` | Once an hour |
-| `@minutely` | `* * * * *` | Once a minute |
+---
 
 ## Chain API
 
@@ -122,6 +144,8 @@ scheduler.Every().Day().At("09:00").
     Do(job, "custom-task-id")
 ```
 
+---
+
 ## Options
 
 ```go
@@ -132,15 +156,19 @@ cron.WithSeconds()                  // Enable 6-field cron
 cron.WithYears()                    // Enable 7-field cron
 ```
 
+---
+
 ## Storage Backends
 
 ```go
 // Heap (default) - simple, good for fewer tasks
 scheduler := cron.NewScheduler()
 
-// TimeWheel - efficient for many tasks
+// TimeWheel - efficient for many tasks (O(1) tick)
 scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
 ```
+
+---
 
 ## Load from Config
 
@@ -166,6 +194,8 @@ scheduler.LoadTasksFromConfig(config)
 scheduler.Start()
 ```
 
+---
+
 ## Task Management
 
 ```go
@@ -181,10 +211,45 @@ scheduler.RemoveTask(&cron.Task{ID: "task-id"})
 scheduler.Stop()
 ```
 
+---
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) - Detailed guide with examples
-- [中文文档](docs/README.zh.md) - Chinese documentation
+- [API Reference](docs/api-reference.md) - Types and functions
+- [中文文档](docs/readme.zh.md) - Chinese documentation
+- [Benchmarks](benchmark/README.md) - Performance details
+
+## Examples
+
+Run any example:
+
+```bash
+go run ./examples/basic
+```
+
+| Example | Description |
+|---------|-------------|
+| [basic](examples/basic) | Minimal setup, 5-minute quickstart |
+| [fluent-api](examples/fluent-api) | Chain-style `Every().Day().At()` |
+| [cron-expr](examples/cron-expr) | 5/6/7-field cron, L/W, macros |
+| [config-file](examples/config-file) | YAML/JSON config loading |
+| [error-handling](examples/error-handling) | Timeout, retry, context |
+| [graceful](examples/graceful) | Signal handling, shutdown |
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
 
 ## License
 

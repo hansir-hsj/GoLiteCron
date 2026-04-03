@@ -22,13 +22,11 @@ const (
 )
 
 // Logger defines the logging interface used by the scheduler.
-// Implementations can write to any destination (os.Stderr, files, syslog, etc.).
-// The default implementation writes to os.Stderr.
 type Logger interface {
 	Printf(format string, args ...any)
 }
 
-// stdLogger wraps Go's standard log.Logger to implement the Logger interface.
+// stdLogger wraps Go's standard log.Logger.
 type stdLogger struct {
 	*log.Logger
 }
@@ -43,8 +41,8 @@ type Scheduler struct {
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
 	running     int32
-	mu          sync.Mutex // protects Start/Stop lifecycle
-	taskMu      sync.Mutex // protects task check+add atomicity
+	mu          sync.Mutex // protects Start/Stop
+	taskMu      sync.Mutex // protects task operations
 }
 
 func NewScheduler(storageType ...StorageType) *Scheduler {
@@ -66,8 +64,7 @@ func NewScheduler(storageType ...StorageType) *Scheduler {
 	}
 }
 
-// WithLogger sets a custom logger for the scheduler.
-// It must be called before Start().
+// WithLogger sets a custom logger. Must be called before Start().
 func (s *Scheduler) WithLogger(l Logger) {
 	if l != nil {
 		s.logger = l
@@ -139,8 +136,6 @@ func (s *Scheduler) GetTaskInfo(taskID string) string {
 }
 
 func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
-	// Expensive operations outside the lock: cron parsing and Next() calculation
-	// do not require mutual exclusion
 	parser, err := newCronParser(expr, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to parse cron expression: %w", err)
@@ -150,7 +145,6 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 	nowInTaskZone := nowUTC.In(parser.location)
 	nextRunTime := parser.Next(nowInTaskZone)
 
-	// Check if a valid next run time was found
 	if nextRunTime.IsZero() {
 		return fmt.Errorf("failed to calculate next run time for task %s: cron expression may be invalid or unsatisfiable", job.ID())
 	}
@@ -163,7 +157,6 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 		PreRunTime:  nowInTaskZone,
 	}
 
-	// Lock only for the check+add to guarantee atomicity
 	s.taskMu.Lock()
 	defer s.taskMu.Unlock()
 
@@ -176,12 +169,8 @@ func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error {
 }
 
 func (s *Scheduler) RemoveTask(task *Task) bool {
-	// Always mark task as removed to prevent rescheduling after execution
-	// This is important even if task is currently executing (not in storage)
 	atomic.StoreInt32(&task.Removed, 1)
 
-	// Hold taskMu for TaskExist + RemoveTask atomicity,
-	// preventing races with AddTask and internal reschedule.
 	s.taskMu.Lock()
 	defer s.taskMu.Unlock()
 
@@ -202,7 +191,6 @@ func (s *Scheduler) Start() {
 		return
 	}
 	atomic.StoreInt32(&s.running, 1)
-	// Recreate stopChan to allow restart after Stop
 	s.stopChan = make(chan struct{})
 	s.wg.Add(1)
 	go s.run()
@@ -273,17 +261,13 @@ func (s *Scheduler) run() {
 
 							select {
 							case err = <-done:
-								// Task completed successfully or failed within timeout
 							case <-ctx.Done():
 								err = fmt.Errorf("task %s timed out after %s", t.ID, timeout)
 								timedOut = true
 							}
 
-							cancel() // Release context resources immediately after each iteration
+							cancel()
 
-							// Skip retries on timeout to prevent goroutine accumulation.
-							// Note: The timed-out goroutine may still be running (Go limitation).
-							// Recommendation: Job implementations should support context cancellation.
 							if timedOut {
 								s.logger.Printf("Task %s timed out, skipping retries to prevent goroutine accumulation\n", t.ID)
 								break
@@ -298,18 +282,16 @@ func (s *Scheduler) run() {
 							break
 						}
 					}
-					// Convert the current time to the time zone of the task
+					// Calculate next run time in task's timezone
 					nowUTC := time.Now().UTC()
 					nowInTaskZone := nowUTC.In(t.CronParser.location)
 					nextRunTime := t.CronParser.Next(nowInTaskZone)
 
-					// Check if a valid next run time was found
 					if nextRunTime.IsZero() {
 						s.logger.Printf("Task %s: failed to calculate next run time, task will not be rescheduled\n", t.ID)
 						return
 					}
 
-					// Check if scheduler has been stopped
 					if atomic.LoadInt32(&s.running) == 0 {
 						return
 					}
@@ -323,8 +305,6 @@ func (s *Scheduler) run() {
 						Running:     0,
 					}
 
-					// Hold taskMu for Removed check + AddTask atomicity,
-					// preventing races with external AddTask/RemoveTask.
 					s.taskMu.Lock()
 					if atomic.LoadInt32(&t.Removed) == 1 {
 						s.taskMu.Unlock()

@@ -11,8 +11,8 @@
 - [配置选项](#配置选项)
 - [从配置文件加载](#从配置文件加载)
 - [任务管理](#任务管理)
-- [API 参考](#api-参考)
 - [最佳实践](#最佳实践)
+- [示例代码](#示例代码)
 
 ## 安装
 
@@ -435,3 +435,22 @@ if removed {
 7. **优雅关闭**
    - 退出前始终调用 `scheduler.Stop()`
    - 这将等待正在运行的任务完成
+
+## 示例代码
+
+完整的可运行示例位于 [examples/](../examples/) 目录：
+
+| 示例 | 说明 |
+|------|------|
+| [basic](../examples/basic) | 最简示例，5分钟快速上手 |
+| [fluent-api](../examples/fluent-api) | 链式 API `Every().Day().At()` |
+| [cron-expr](../examples/cron-expr) | 5/6/7字段 cron、L/W、宏 |
+| [config-file](../examples/config-file) | YAML/JSON 配置文件加载 |
+| [error-handling](../examples/error-handling) | 超时、重试、context 处理 |
+| [graceful](../examples/graceful) | 信号处理、优雅关闭 |
+
+运行示例：
+
+```bash
+go run ./examples/basic
+```

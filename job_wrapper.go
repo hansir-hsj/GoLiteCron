@@ -21,9 +21,7 @@ func (fj *FuncJob) ID() string {
 	return fj.id
 }
 
-// WrapJob wraps a function as a Job.
-// The function can either accept no arguments (func() error) or a context (func(context.Context) error).
-// Returns an error if the function signature is not supported.
+// WrapJob wraps a function as a Job. Supports func() error or func(context.Context) error.
 func WrapJob(id string, fn any) (Job, error) {
 	switch f := fn.(type) {
 	case func() error:
