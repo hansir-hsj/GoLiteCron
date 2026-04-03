@@ -11,8 +11,8 @@ This guide covers all features of GoLiteCron with detailed examples.
 - [Configuration Options](#configuration-options)
 - [Loading from Config Files](#loading-from-config-files)
 - [Task Management](#task-management)
-- [API Reference](#api-reference)
 - [Best Practices](#best-practices)
+- [Examples](#examples)
 
 ## Installation
 
@@ -494,3 +494,22 @@ scheduler.Stop()
 7. **Graceful shutdown**
    - Always call `scheduler.Stop()` before exiting
    - Running tasks will be allowed to complete
+
+## Examples
+
+Complete runnable examples are available in the [examples/](../examples/) directory:
+
+| Example | Description |
+|---------|-------------|
+| [basic](../examples/basic) | Minimal setup, 5-minute quickstart |
+| [fluent-api](../examples/fluent-api) | Chain-style `Every().Day().At()` |
+| [cron-expr](../examples/cron-expr) | 5/6/7-field cron, L/W, macros |
+| [config-file](../examples/config-file) | YAML/JSON config loading |
+| [error-handling](../examples/error-handling) | Timeout, retry, context |
+| [graceful](../examples/graceful) | Signal handling, graceful shutdown |
+
+Run any example:
+
+```bash
+go run ./examples/basic
+```

@@ -1,24 +1,48 @@
 # GoLiteCron
 
+```
+   ____       _     _ _        ____                  
+  / ___| ___ | |   (_) |_ ___ / ___|_ __ ___  _ __  
+ | |  _ / _ \| |   | | __/ _ \ |   | '__/ _ \| '_ \ 
+ | |_| | (_) | |___| | ||  __/ |___| | | (_) | | | |
+  \____|\___/|_____|_|\__\___|\____|_|  \___/|_| |_|
+```
+
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-blue)](https://go.dev/)
+[![GoDoc](https://pkg.go.dev/badge/github.com/hansir-hsj/GoLiteCron.svg)](https://pkg.go.dev/github.com/hansir-hsj/GoLiteCron)
+[![Go Report Card](https://goreportcard.com/badge/github.com/hansir-hsj/GoLiteCron)](https://goreportcard.com/report/github.com/hansir-hsj/GoLiteCron)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](../LICENSE)
 [![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen.svg)](.)
 
-轻量级、高性能的 Go 定时任务调度器。
+轻量级、高性能的 Go 定时任务调度器，支持流式 API、双存储后端、内置超时重试。
 
-[English](../README.md)
+[English](../README.md) | [入门指南](getting-started.zh.md) | [API 参考](api-reference.zh.md)
 
-## 特性
+---
 
-| 特性 | 描述 |
-|------|------|
-| 🕐 Cron 表达式 | 标准5字段、6字段（含秒）、7字段（含年） |
-| 🔗 链式 API | 流式接口：`scheduler.Every(10).Seconds().Do(job)` |
-| ⏱️ 超时与重试 | 内置超时控制和自动重试 |
-| 🌍 时区支持 | 完整的时区支持 |
-| 📦 存储后端 | TimeWheel（高性能）或 Heap（简单） |
-| 📄 配置文件 | 从 YAML/JSON 加载任务 |
-| 🛡️ Panic 恢复 | 自动从崩溃任务中恢复 |
+## 为什么选择 GoLiteCron？
+
+| 特性 | GoLiteCron | robfig/cron |
+|------|------------|-------------|
+| **流式 API** | `Every(10).Seconds().Do(fn)` | 不支持 |
+| **存储后端** | Heap + TimeWheel | 仅 Heap |
+| **超时与重试** | 内置支持 | 需手动实现 |
+| **配置文件** | YAML / JSON | 不支持 |
+| **Cron 字段** | 5/6/7 字段（支持年份） | 5/6 字段 |
+| **连续调度 Next() 100次** | **13.8ms** | 121ms (**慢 8.8 倍**) |
+
+### 性能对比（vs robfig/cron）
+
+| 测试项 | GoLiteCron | robfig/cron | 胜出 |
+|--------|------------|-------------|------|
+| Next() - 每分钟 | **79 ns** | 196 ns | GoLiteCron **2.5x** |
+| Next() - 连续调用100次 | **13.8 ms** | 121 ms | GoLiteCron **8.8x** |
+| Next() - 简单表达式 | 111 ns | 119 ns | GoLiteCron |
+| Tick 1000任务 (10个就绪) | **5.5 µs** | - | Heap 后端 |
+
+> 测试环境：Apple M4, Go 1.23。详见 [benchmark/](../benchmark/)
+
+---
 
 ## 安装
 
@@ -29,36 +53,57 @@ go get -u github.com/hansir-hsj/GoLiteCron
 ## 快速开始
 
 ```go
-package main
+scheduler := cron.NewScheduler()
 
-import (
-    "fmt"
-    cron "github.com/hansir-hsj/GoLiteCron"
-)
+// 流式 API
+scheduler.Every(10).Seconds().Do(func() { fmt.Println("tick") })
 
-func main() {
-    scheduler := cron.NewScheduler()
+// Cron 表达式
+scheduler.AddTask("*/5 * * * *", cron.WrapJob("job-1", myFunc))
 
-    // 链式 API（推荐）
-    scheduler.Every(10).Seconds().Do(func() {
-        fmt.Println("每10秒运行一次")
-    })
-
-    // Cron 表达式
-    scheduler.AddTask("*/5 * * * *", cron.WrapJob("five-min", func() error {
-        fmt.Println("每5分钟运行一次")
-        return nil
-    }))
-
-    scheduler.Start()
-    defer scheduler.Stop()
-    select {} // 保持运行
-}
+scheduler.Start()
+defer scheduler.Stop()
+select {}
 ```
+
+---
+
+## 架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Scheduler                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │ Chain API   │  │ Cron Parser │  │ Config Loader       │  │
+│  │ Every().Do()│  │ 5/6/7 字段  │  │ YAML / JSON         │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+│         └────────────────┼───────────────────┬┘             │
+│                          ▼                   │              │
+│                   ┌─────────────┐            │              │
+│                   │    Task     │◄───────────┘              │
+│                   │ ID, Job,    │                           │
+│                   │ NextRunTime │                           │
+│                   └──────┬──────┘                           │
+│                          ▼                                  │
+│         ┌────────────────┴────────────────┐                 │
+│         ▼                                 ▼                 │
+│  ┌─────────────┐                   ┌─────────────┐          │
+│  │    Heap     │                   │  TimeWheel  │          │
+│  │   (默认)    │                   │   (O(1))    │          │
+│  │  O(log n)   │                   │   多层级    │          │
+│  └─────────────┘                   └─────────────┘          │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                   Executor                          │    │
+│  │  • 超时控制  • 重试逻辑  • Panic 恢复               │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## Cron 表达式
 
-### 标准格式（5字段）
 ```
 ┌───────────── 分钟 (0-59)
 │ ┌───────────── 小时 (0-23)
@@ -68,38 +113,15 @@ func main() {
 * * * * *
 ```
 
-### 扩展格式（6字段，需要 `WithSeconds()`）
-```
-┌───────────── 秒 (0-59)
-│ ┌───────────── 分钟 (0-59)
-│ │ ┌───────────── 小时 (0-23)
-│ │ │ ┌───────────── 日 (1-31)
-│ │ │ │ ┌───────────── 月 (1-12)
-│ │ │ │ │ ┌───────────── 星期 (0-6)
-* * * * * *
-```
+**特殊字符：** `*` (任意) · `,` (列表) · `-` (范围) · `/` (步长) · `L` (最后) · `W` (工作日)
 
-### 特殊字符
+**预定义宏：** `@yearly` · `@monthly` · `@weekly` · `@daily` · `@hourly`
 
-| 字符 | 描述 | 示例 |
-|------|------|------|
-| `*` | 任意值 | `* * * * *` 每分钟 |
-| `,` | 列表 | `1,15 * * * *` 第1和15分钟 |
-| `-` | 范围 | `1-5 * * * *` 第1-5分钟 |
-| `/` | 步长 | `*/10 * * * *` 每10分钟 |
-| `L` | 最后 | `0 0 L * *` 每月最后一天 |
-| `W` | 工作日 | `0 0 15W * *` 最接近15号的工作日 |
+**扩展格式：** 6字段含秒 (`WithSeconds()`)，7字段含年 (`WithYears()`)
 
-### 预定义宏
+> 详细示例请参阅 [入门指南](getting-started.zh.md#cron-表达式)
 
-| 宏 | 等价表达式 | 描述 |
-|----|-----------|------|
-| `@yearly` | `0 0 1 1 *` | 每年一次（1月1日） |
-| `@monthly` | `0 0 1 * *` | 每月一次（1号） |
-| `@weekly` | `0 0 * * 0` | 每周一次（周日） |
-| `@daily` | `0 0 * * *` | 每天一次（午夜） |
-| `@hourly` | `0 * * * *` | 每小时一次 |
-| `@minutely` | `* * * * *` | 每分钟一次 |
+---
 
 ## 链式 API
 
@@ -122,6 +144,8 @@ scheduler.Every().Day().At("09:00").
     Do(job, "custom-task-id")
 ```
 
+---
+
 ## 配置选项
 
 ```go
@@ -132,15 +156,19 @@ cron.WithSeconds()                  // 启用6字段cron
 cron.WithYears()                    // 启用7字段cron
 ```
 
+---
+
 ## 存储后端
 
 ```go
 // Heap（默认）- 简单，适合少量任务
 scheduler := cron.NewScheduler()
 
-// TimeWheel - 高效，适合大量任务
+// TimeWheel - 高效，适合大量任务 (O(1) tick)
 scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
 ```
+
+---
 
 ## 从配置文件加载
 
@@ -166,6 +194,8 @@ scheduler.LoadTasksFromConfig(config)
 scheduler.Start()
 ```
 
+---
+
 ## 任务管理
 
 ```go
@@ -181,10 +211,45 @@ scheduler.RemoveTask(&cron.Task{ID: "task-id"})
 scheduler.Stop()
 ```
 
+---
+
 ## 详细文档
 
 - [入门指南](getting-started.zh.md) - 详细使用示例
 - [API 参考](api-reference.zh.md) - 类型与函数说明
+- [English](../README.md) - 英文文档
+- [性能测试](../benchmark/README.md) - 基准测试详情
+
+## 示例代码
+
+运行任意示例：
+
+```bash
+go run ./examples/basic
+```
+
+| 示例 | 说明 |
+|------|------|
+| [basic](../examples/basic) | 最简示例，5分钟快速上手 |
+| [fluent-api](../examples/fluent-api) | 链式 API `Every().Day().At()` |
+| [cron-expr](../examples/cron-expr) | 5/6/7字段 cron、L/W、宏 |
+| [config-file](../examples/config-file) | YAML/JSON 配置文件加载 |
+| [error-handling](../examples/error-handling) | 超时、重试、context 处理 |
+| [graceful](../examples/graceful) | 信号处理、优雅关闭 |
+
+---
+
+## 参与贡献
+
+欢迎贡献代码！请随时提交 Pull Request。
+
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add some amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 发起 Pull Request
+
+---
 
 ## 许可证
 

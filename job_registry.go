@@ -11,9 +11,7 @@ var (
 	registryMu  sync.RWMutex
 )
 
-// RegisterJob registers a job function by name.
-// Accepts func() error or func(context.Context) error.
-// If a job with the same name already exists, it will be overwritten and a warning will be printed to stderr.
+// RegisterJob registers a job function by name. Accepts func() error or func(context.Context) error.
 func RegisterJob(name string, fn any) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -24,7 +22,6 @@ func RegisterJob(name string, fn any) {
 }
 
 // GetJob retrieves a registered job function by name.
-// Returns func() error or func(context.Context) error.
 func GetJob(name string) (any, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
