@@ -1,18 +1,14 @@
+<p align="center">
+  <img src="https://img.shields.io/badge/GoLiteCron-Lightweight%20Cron%20Scheduler-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="GoLiteCron">
+</p>
+
 # GoLiteCron
 
-```
-   ____       _     _ _        ____                  
-  / ___| ___ | |   (_) |_ ___ / ___|_ __ ___  _ __  
- | |  _ / _ \| |   | | __/ _ \ |   | '__/ _ \| '_ \ 
- | |_| | (_) | |___| | ||  __/ |___| | | (_) | | | |
-  \____|\___/|_____|_|\__\___|\____|_|  \___/|_| |_|
-```
-
-[![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-blue)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![GoDoc](https://pkg.go.dev/badge/github.com/hansir-hsj/GoLiteCron.svg)](https://pkg.go.dev/github.com/hansir-hsj/GoLiteCron)
 [![Go Report Card](https://goreportcard.com/badge/github.com/hansir-hsj/GoLiteCron)](https://goreportcard.com/report/github.com/hansir-hsj/GoLiteCron)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](../LICENSE)
-[![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen.svg)](.)
+[![License](https://img.shields.io/badge/License-MIT-green)](../LICENSE)
+[![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)](.)
 
 轻量级、高性能的 Go 定时任务调度器，支持流式 API、双存储后端、内置超时重试。
 
