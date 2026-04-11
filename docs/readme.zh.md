@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/GoLiteCron-Lightweight%20Cron%20Scheduler-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="GoLiteCron">
-</p>
-
 # GoLiteCron
 
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-00ADD8?logo=go&logoColor=white)](https://go.dev/)
@@ -13,8 +9,6 @@
 轻量级、高性能的 Go 定时任务调度器，支持流式 API、双存储后端、内置超时重试。
 
 [English](../README.md) | [入门指南](getting-started.zh.md) | [API 参考](api-reference.zh.md)
-
----
 
 ## 为什么选择 GoLiteCron？
 

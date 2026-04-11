@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/GoLiteCron-Lightweight%20Cron%20Scheduler-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="GoLiteCron">
-</p>
-
 # GoLiteCron
 
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-00ADD8?logo=go&logoColor=white)](https://go.dev/)
@@ -13,8 +9,6 @@
 A lightweight, high-performance cron job scheduler for Go with fluent API, dual storage backends, and built-in timeout/retry.
 
 [中文文档](docs/readme.zh.md) | [Getting Started](docs/getting-started.md) | [API Reference](docs/api-reference.md)
-
----
 
 ## Why GoLiteCron?
 
