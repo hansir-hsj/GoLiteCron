@@ -48,7 +48,7 @@ func TestConcurrent_MassiveAddRemove(t *testing.T) {
 				tasks := s.GetTasks()
 				for _, task := range tasks {
 					if task.ID == taskID {
-						s.RemoveTask(task)
+						s.RemoveTaskByID(task.ID)
 						break
 					}
 				}
@@ -139,7 +139,7 @@ func TestConcurrent_RemoveWhileTicking(t *testing.T) {
 				}
 				// Remove random task
 				idx := rand.Intn(len(tasks))
-				s.RemoveTask(tasks[idx])
+				s.RemoveTaskByID(tasks[idx].ID)
 				removeCount.Add(1)
 				time.Sleep(2 * time.Millisecond)
 			}
@@ -253,7 +253,7 @@ func TestConcurrent_RaceCondition_AddGetRemove(t *testing.T) {
 			defer wg.Done()
 			tasks := s.GetTasks()
 			if len(tasks) > 0 {
-				s.RemoveTask(tasks[0])
+				s.RemoveTaskByID(tasks[0].ID)
 			}
 		}()
 	}
@@ -264,11 +264,7 @@ func TestConcurrent_RaceCondition_AddGetRemove(t *testing.T) {
 
 // TestConcurrent_RaceCondition_NextCalculation tests concurrent Next() calls.
 func TestConcurrent_RaceCondition_NextCalculation(t *testing.T) {
-	s := NewScheduler()
-	job, _ := WrapJob("race-next", func() error { return nil })
-	_ = s.AddTask("*/5 * * * *", job)
-
-	task := s.GetTasks()[0]
+	parser := mustCronParser(t, "*/5 * * * *", WithLocation(time.UTC))
 	now := time.Now()
 
 	var wg sync.WaitGroup
@@ -277,7 +273,7 @@ func TestConcurrent_RaceCondition_NextCalculation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_ = task.CronParser.Next(now)
+				_ = parser.Next(now)
 			}
 		}()
 	}
@@ -292,7 +288,7 @@ func TestConcurrent_RaceCondition_NextCalculation(t *testing.T) {
 
 // TestConcurrent_HighLoad_1000Tasks tests scheduler with 1000 tasks.
 func TestConcurrent_HighLoad_1000Tasks(t *testing.T) {
-	s := NewScheduler(StorageTypeHeap)
+	s := NewScheduler()
 
 	const numTasks = 1000
 
@@ -328,7 +324,7 @@ func TestConcurrent_HighLoad_10000Tasks(t *testing.T) {
 		t.Skip("Skipping high load test in short mode")
 	}
 
-	s := NewScheduler(StorageTypeTimeWheel) // Use TimeWheel for large task counts
+	s := NewScheduler()
 
 	const numTasks = 10000
 
@@ -423,9 +419,9 @@ func TestConcurrent_ConcurrentStartStop(t *testing.T) {
 // Storage Backend Concurrent Tests
 // ============================================================================
 
-// TestConcurrent_TaskQueue_Operations tests TaskQueue under concurrent access.
-func TestConcurrent_TaskQueue_Operations(t *testing.T) {
-	tq := NewTaskQueue()
+// TestConcurrent_taskQueue_Operations tests the internal queue under concurrent access.
+func TestConcurrent_taskQueue_Operations(t *testing.T) {
+	tq := newTaskQueue()
 	now := time.Now()
 
 	var wg sync.WaitGroup
@@ -436,7 +432,7 @@ func TestConcurrent_TaskQueue_Operations(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				task := &Task{
+				task := &task{
 					ID:          fmt.Sprintf("tq-%d-%d", id, j),
 					NextRunTime: now.Add(time.Duration(id*j) * time.Minute),
 				}
@@ -471,62 +467,11 @@ func TestConcurrent_TaskQueue_Operations(t *testing.T) {
 	}
 
 	wg.Wait()
-	t.Log("TaskQueue concurrent operations completed")
-}
-
-// TestConcurrent_TimeWheel_Operations tests TimeWheel under concurrent access.
-func TestConcurrent_TimeWheel_Operations(t *testing.T) {
-	tw := NewDynamicTimeWheel()
-	now := time.Now()
-
-	var wg sync.WaitGroup
-
-	// Concurrent adds
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				task := &Task{
-					ID:          fmt.Sprintf("tw-%d-%d", id, j),
-					NextRunTime: now.Add(time.Duration(id*j) * time.Second),
-				}
-				tw.AddTask(task)
-			}
-		}(i)
-	}
-
-	// Concurrent reads
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
-				_ = tw.GetTasks()
-				_ = tw.TaskExist("tw-0-0")
-			}
-		}()
-	}
-
-	// Concurrent ticks
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			tickTime := now.Add(time.Duration(id) * time.Second)
-			for j := 0; j < 20; j++ {
-				_ = tw.Tick(tickTime)
-				tickTime = tickTime.Add(time.Second)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-	t.Log("TimeWheel concurrent operations completed")
+	t.Log("taskQueue concurrent operations completed")
 }
 
 // ============================================================================
-// Task Execution Concurrent Tests
+// task Execution Concurrent Tests
 // ============================================================================
 
 // TestConcurrent_TaskExecution_NoOverlap ensures same task doesn't run concurrently.
@@ -613,7 +558,7 @@ func TestConcurrent_ContextCancellation(t *testing.T) {
 
 	s := NewScheduler()
 
-	// Task that respects context cancellation
+	// task that respects context cancellation
 	job, _ := WrapJob("cancellable", func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
@@ -693,7 +638,7 @@ func TestConcurrent_CombinedStress(t *testing.T) {
 					tasks := s.GetTasks()
 					if len(tasks) > 0 {
 						idx := rand.Intn(len(tasks))
-						s.RemoveTask(tasks[idx])
+						s.RemoveTaskByID(tasks[idx].ID)
 					}
 					time.Sleep(15 * time.Millisecond)
 				}

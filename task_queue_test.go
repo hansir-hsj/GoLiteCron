@@ -1,19 +1,20 @@
 package golitecron
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
 
 // helpers for tests
-func makeTask(now time.Time, id string, offset time.Duration) *Task {
-	return &Task{
+func makeTask(now time.Time, id string, offset time.Duration) *task {
+	return &task{
 		ID:          id,
 		NextRunTime: now.Add(offset),
 	}
 }
 
-func hasTask(tasks []*Task, id string) bool {
+func hasTask(tasks []*task, id string) bool {
 	for _, t := range tasks {
 		if t.ID == id {
 			return true
@@ -22,9 +23,18 @@ func hasTask(tasks []*Task, id string) bool {
 	return false
 }
 
-func TestNewTaskQueue_AddAndExist(t *testing.T) {
+func hasTaskInfo(tasks []TaskInfo, id string) bool {
+	for _, t := range tasks {
+		if t.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestInternalTaskQueue_AddAndExist(t *testing.T) {
 	now := time.Now().UTC()
-	tq := NewTaskQueue()
+	tq := newTaskQueue()
 
 	if tq.Len() != 0 {
 		t.Fatalf("expected empty queue, got len=%d", tq.Len())
@@ -46,9 +56,9 @@ func TestNewTaskQueue_AddAndExist(t *testing.T) {
 	}
 }
 
-func TestGetTasks_IsCopyOfSlice(t *testing.T) {
+func TestGetTasks_ReturnsIndependentTaskSnapshots(t *testing.T) {
 	now := time.Now().UTC()
-	tq := NewTaskQueue()
+	tq := newTaskQueue()
 
 	t1 := makeTask(now, "a", -time.Minute)
 	t2 := makeTask(now, "b", time.Minute)
@@ -60,21 +70,48 @@ func TestGetTasks_IsCopyOfSlice(t *testing.T) {
 		t.Fatalf("expected 2 tasks, got %d", len(got))
 	}
 
-	// mutate returned slice (append) and ensure original storage not affected
-	got = append(got, makeTask(now, "c", time.Hour))
+	got = append(got, TaskInfo{ID: "c"})
 	if len(got) == len(tq.GetTasks()) {
 		t.Fatalf("expected returned slice append not to change underlying storage length")
 	}
 
-	// underlying queue should still report original two tasks exist
+	got[0].ID = "mutated"
+	got[0].NextRunTime = now.Add(24 * time.Hour)
+
 	if !tq.TaskExist("a") || !tq.TaskExist("b") {
-		t.Fatalf("underlying queue lost tasks after modifying returned slice")
+		t.Fatalf("underlying queue lost tasks after modifying returned task snapshot")
+	}
+
+	due := tq.Tick(now)
+	if !hasTask(due, "a") {
+		t.Fatalf("expected original task a to remain due after mutating returned snapshot")
+	}
+}
+
+func TestGetTasks_ReturnsSortedSnapshots(t *testing.T) {
+	now := time.Now().UTC()
+	tq := newTaskQueue()
+
+	tq.AddTask(makeTask(now, "later", 3*time.Minute))
+	tq.AddTask(makeTask(now, "same-b", time.Minute))
+	tq.AddTask(makeTask(now, "same-a", time.Minute))
+	tq.AddTask(makeTask(now, "earlier", -time.Minute))
+
+	got := tq.GetTasks()
+	ids := make([]string, 0, len(got))
+	for _, task := range got {
+		ids = append(ids, task.ID)
+	}
+
+	want := []string{"earlier", "same-a", "same-b", "later"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("expected sorted task IDs %v, got %v", want, ids)
 	}
 }
 
 func TestRemoveTask(t *testing.T) {
 	now := time.Now().UTC()
-	tq := NewTaskQueue()
+	tq := newTaskQueue()
 
 	t1 := makeTask(now, "r1", -time.Minute)
 	t2 := makeTask(now, "r2", time.Minute)
@@ -85,7 +122,7 @@ func TestRemoveTask(t *testing.T) {
 		t.Fatalf("expected both tasks to exist after add")
 	}
 
-	tq.RemoveTask(t1)
+	tq.RemoveTaskByID(t1.ID)
 
 	if tq.TaskExist("r1") {
 		t.Fatalf("expected r1 to be removed")
@@ -97,7 +134,7 @@ func TestRemoveTask(t *testing.T) {
 
 func TestTick_ReturnsDueTasksAndRemovesThem(t *testing.T) {
 	now := time.Now().UTC()
-	tq := NewTaskQueue()
+	tq := newTaskQueue()
 
 	past1 := makeTask(now, "past1", -2*time.Second)
 	past2 := makeTask(now, "past2", -time.Second)

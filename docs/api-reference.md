@@ -12,18 +12,20 @@ type Scheduler struct {
 }
 ```
 
-### Task
+### TaskInfo
 
-`Task` represents a scheduled job with its configuration and status.
+`TaskInfo` is a read-only snapshot returned by `GetTasks`.
 
 ```go
-type Task struct {
+type TaskInfo struct {
     ID          string
-    Job         Job
     NextRunTime time.Time
     PreRunTime  time.Time
-    Running     int32
-    Removed     int32
+    Running     bool
+    Removed     bool
+    Location    *time.Location
+    Timeout     time.Duration
+    Retry       int
 }
 ```
 
@@ -59,19 +61,6 @@ type TaskConfig struct {
 }
 ```
 
-### StorageType
-
-Enum for selecting the storage backend.
-
-```go
-type StorageType int
-
-const (
-    StorageTypeHeap StorageType = iota
-    StorageTypeTimeWheel
-)
-```
-
 ### Logger
 
 Interface for custom logging. If not set, defaults to writing to `os.Stderr`.
@@ -89,10 +78,9 @@ type Logger interface {
 Creates a new scheduler instance.
 
 ```go
-func NewScheduler(storageType ...StorageType) *Scheduler
+func NewScheduler() *Scheduler
 ```
 
-- `storageType`: Optional. Defaults to `StorageTypeHeap`.
 
 ### WrapJob
 
@@ -105,11 +93,11 @@ func WrapJob(id string, fn any) (Job, error)
 
 ### RegisterJob / GetJob
 
-Manages job functions for configuration loading.
+Manages scheduler-local job functions for configuration loading.
 
 ```go
-func RegisterJob(name string, fn any)         // fn: func() error or func(context.Context) error
-func GetJob(name string) (any, bool)          // returns fn or nil, ok
+func (s *Scheduler) RegisterJob(name string, fn any) error
+func (s *Scheduler) GetJob(name string) (any, bool)
 ```
 
 ### LoadFromYaml / LoadFromJson
@@ -133,10 +121,18 @@ func (s *Scheduler) Start()
 
 ### Stop
 
-Stops the scheduler and waits for running tasks to complete.
+Stops the scheduler loop and waits for it to exit. It prevents new executions from being scheduled, but does not wait for already running tasks.
 
 ```go
 func (s *Scheduler) Stop()
+```
+
+### Shutdown
+
+Stops the scheduler, cancels contexts passed to running context-aware jobs, and waits for tracked goroutines to finish or until the context is canceled.
+
+```go
+func (s *Scheduler) Shutdown(ctx context.Context) error
 ```
 
 ### AddTask
@@ -144,36 +140,38 @@ func (s *Scheduler) Stop()
 Adds a new task to the scheduler.
 
 ```go
-func (s *Scheduler) AddTask(expr string, job Job, opts ...Option) error
+func (s *Scheduler) AddTask(expr string, job Job, opts ...TaskOption) error
 ```
 
-### RemoveTask
+### RemoveTaskByID
 
-Removes a task from the scheduler.
+Removes a task from the scheduler by ID. This is the recommended removal
+method because it also prevents a currently running task with the same ID from
+being rescheduled after completion.
 
 ```go
-func (s *Scheduler) RemoveTask(task *Task) bool
+func (s *Scheduler) RemoveTaskByID(taskID string) bool
 ```
 
 ### GetTasks
 
-Returns a slice of all currently scheduled tasks.
+Returns read-only snapshots of all currently scheduled tasks. Mutating returned values never changes scheduler state.
 
 ```go
-func (s *Scheduler) GetTasks() []*Task
+func (s *Scheduler) GetTasks() []TaskInfo
 ```
 
-### GetTaskInfo
+### GetTask
 
-Returns a string description of a specific task.
+Returns a read-only snapshot for one scheduled task.
 
 ```go
-func (s *Scheduler) GetTaskInfo(taskID string) string
+func (s *Scheduler) GetTask(taskID string) (TaskInfo, bool)
 ```
 
 ### LoadTasksFromConfig
 
-Loads tasks from a parsed `Config` object.
+Loads tasks from a parsed `Config` object. Loading is atomic: if any task is invalid, no tasks from the config are added.
 
 ```go
 func (s *Scheduler) LoadTasksFromConfig(config *Config) error
@@ -192,15 +190,15 @@ func (s *Scheduler) Every(intervals ...int) *ScheduleBuilder
 Sets a custom logger for the scheduler. Must be called before `Start()`.
 
 ```go
-func (s *Scheduler) WithLogger(l Logger)
+func (s *Scheduler) WithLogger(l Logger) error
 ```
 
 ## Options
 
-Configuration options for `AddTask`.
+Configuration options for `AddTask`. `WithTimeout` and `WithRetry` are task-only options and cannot be passed to `Parse`.
 
 - `WithSeconds()`: Enables second-level precision (6 fields).
 - `WithYears()`: Enables year field (7 fields).
 - `WithLocation(loc *time.Location)`: Sets timezone.
-- `WithTimeout(timeout time.Duration)`: Sets execution timeout.
+- `WithTimeout(timeout time.Duration)`: Sets how long the scheduler waits for one execution. Jobs that accept `context.Context` should stop when the context is done; jobs that ignore it may continue running until they return.
 - `WithRetry(retry int)`: Sets retry count on failure.

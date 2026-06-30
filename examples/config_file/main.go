@@ -10,10 +10,6 @@ import (
 )
 
 func main() {
-	// Register job functions before loading config
-	cron.RegisterJob("sendReport", sendReport)
-	cron.RegisterJob("cleanup", cleanup)
-
 	// Load from YAML (or use LoadFromJSON for JSON)
 	cfg, err := cron.LoadFromYAML("tasks.yaml")
 	if err != nil {
@@ -22,6 +18,15 @@ func main() {
 	}
 
 	s := cron.NewScheduler()
+	if err := s.RegisterJob("sendReport", sendReport); err != nil {
+		fmt.Printf("Failed to register sendReport: %v\n", err)
+		return
+	}
+	if err := s.RegisterJob("cleanup", cleanup); err != nil {
+		fmt.Printf("Failed to register cleanup: %v\n", err)
+		return
+	}
+
 	if err := s.LoadTasksFromConfig(cfg); err != nil {
 		fmt.Printf("Failed to apply config: %v\n", err)
 		return

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
-	"time"
 
 	golitecron "github.com/hansir-hsj/GoLiteCron"
 	robfigcron "github.com/robfig/cron/v3"
@@ -54,53 +53,25 @@ func BenchmarkMemory_Parse_RobfigCron(b *testing.B) {
 // ============================================================================
 
 func BenchmarkMemory_Heap_1000Tasks(b *testing.B) {
-	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tq := golitecron.NewTaskQueue()
+		s := golitecron.NewScheduler()
 		for j := 0; j < 1000; j++ {
-			task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Minute))
-			tq.AddTask(task)
-		}
-	}
-}
-
-func BenchmarkMemory_TimeWheel_1000Tasks(b *testing.B) {
-	now := time.Now()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tw := golitecron.NewDynamicTimeWheel()
-		for j := 0; j < 1000; j++ {
-			task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Second))
-			tw.AddTask(task)
+			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
+			_ = s.AddTask("*/5 * * * *", job)
 		}
 	}
 }
 
 func BenchmarkMemory_Heap_10000Tasks(b *testing.B) {
-	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tq := golitecron.NewTaskQueue()
+		s := golitecron.NewScheduler()
 		for j := 0; j < 10000; j++ {
-			task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Minute))
-			tq.AddTask(task)
-		}
-	}
-}
-
-func BenchmarkMemory_TimeWheel_10000Tasks(b *testing.B) {
-	now := time.Now()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tw := golitecron.NewDynamicTimeWheel()
-		for j := 0; j < 10000; j++ {
-			task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Second))
-			tw.AddTask(task)
+			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
+			_ = s.AddTask("*/5 * * * *", job)
 		}
 	}
 }
@@ -113,19 +84,7 @@ func BenchmarkMemory_Scheduler_Heap_100Tasks(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s := golitecron.NewScheduler(golitecron.StorageTypeHeap)
-		for j := 0; j < 100; j++ {
-			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
-			_ = s.AddTask("*/5 * * * *", job)
-		}
-	}
-}
-
-func BenchmarkMemory_Scheduler_TimeWheel_100Tasks(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		s := golitecron.NewScheduler(golitecron.StorageTypeTimeWheel)
+		s := golitecron.NewScheduler()
 		for j := 0; j < 100; j++ {
 			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
 			_ = s.AddTask("*/5 * * * *", job)
@@ -137,19 +96,7 @@ func BenchmarkMemory_Scheduler_Heap_1000Tasks(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s := golitecron.NewScheduler(golitecron.StorageTypeHeap)
-		for j := 0; j < 1000; j++ {
-			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
-			_ = s.AddTask("*/5 * * * *", job)
-		}
-	}
-}
-
-func BenchmarkMemory_Scheduler_TimeWheel_1000Tasks(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		s := golitecron.NewScheduler(golitecron.StorageTypeTimeWheel)
+		s := golitecron.NewScheduler()
 		for j := 0; j < 1000; j++ {
 			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
 			_ = s.AddTask("*/5 * * * *", job)
@@ -219,18 +166,17 @@ func TestMemory_LeakDetection_AddRemove(t *testing.T) {
 
 	for round := 0; round < 10; round++ {
 		s := golitecron.NewScheduler()
-		tasks := make([]*golitecron.Task, 0, 1000)
 
 		// Add 1000 tasks
 		for i := 0; i < 1000; i++ {
 			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", i), func() error { return nil })
 			_ = s.AddTask("*/5 * * * *", job)
 		}
-		tasks = s.GetTasks()
+		tasks := s.GetTasks()
 
 		// Remove all tasks
 		for _, task := range tasks {
-			s.RemoveTask(task)
+			s.RemoveTaskByID(task.ID)
 		}
 	}
 
@@ -250,15 +196,15 @@ func TestMemory_LeakDetection_Tick(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 
-	now := time.Now()
 	for round := 0; round < 100; round++ {
-		tq := golitecron.NewTaskQueue()
+		s := golitecron.NewScheduler()
 		for i := 0; i < 100; i++ {
-			task := createMockTask(fmt.Sprintf("task-%d", i), now.Add(-time.Minute))
-			tq.AddTask(task)
+			job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", i), func() error { return nil })
+			_ = s.AddTask("*/5 * * * *", job)
 		}
-		// Tick should remove all tasks
-		_ = tq.Tick(now)
+		for _, task := range s.GetTasks() {
+			s.RemoveTaskByID(task.ID)
+		}
 	}
 
 	runtime.GC()
@@ -301,16 +247,11 @@ func BenchmarkMemoryProfile_FullWorkflow(b *testing.B) {
 			}
 		}
 
-		// Get tasks and calculate next times
 		tasks := s.GetTasks()
-		now := time.Now()
-		for _, task := range tasks {
-			_ = task.CronParser.Next(now)
-		}
 
 		// Remove half the tasks
 		for i := 0; i < len(tasks)/2; i++ {
-			s.RemoveTask(tasks[i])
+			s.RemoveTaskByID(tasks[i].ID)
 		}
 	}
 }
@@ -321,36 +262,16 @@ func BenchmarkMemoryProfile_FullWorkflow(b *testing.B) {
 
 func BenchmarkMemoryOverhead_PerTask_Heap(b *testing.B) {
 	taskCounts := []int{100, 500, 1000, 5000}
-	now := time.Now()
 
 	for _, count := range taskCounts {
 		b.Run(fmt.Sprintf("Tasks_%d", count), func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				tq := golitecron.NewTaskQueue()
+				s := golitecron.NewScheduler()
 				for j := 0; j < count; j++ {
-					task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Minute))
-					tq.AddTask(task)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkMemoryOverhead_PerTask_TimeWheel(b *testing.B) {
-	taskCounts := []int{100, 500, 1000, 5000}
-	now := time.Now()
-
-	for _, count := range taskCounts {
-		b.Run(fmt.Sprintf("Tasks_%d", count), func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tw := golitecron.NewDynamicTimeWheel()
-				for j := 0; j < count; j++ {
-					task := createMockTask(fmt.Sprintf("task-%d", j), now.Add(time.Duration(j)*time.Second))
-					tw.AddTask(task)
+					job, _ := golitecron.WrapJob(fmt.Sprintf("task-%d", j), func() error { return nil })
+					_ = s.AddTask("*/5 * * * *", job)
 				}
 			}
 		})

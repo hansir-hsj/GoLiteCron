@@ -15,7 +15,7 @@
 | 特性 | GoLiteCron | robfig/cron |
 |------|------------|-------------|
 | **流式 API** | `Every(10).Seconds().Do(fn)` | 不支持 |
-| **存储后端** | Heap + TimeWheel | 仅 Heap |
+| **存储后端** | Heap 优先队列 | 仅 Heap |
 | **超时与重试** | 内置支持 | 需手动实现 |
 | **配置文件** | YAML / JSON | 不支持 |
 | **Cron 字段** | 5/6/7 字段（支持年份） | 5/6 字段 |
@@ -75,9 +75,7 @@ flowchart TB
         Task["📋 Task 任务<br/><code>ID, Job, NextRunTime</code>"]
         
         subgraph Storage["存储后端"]
-            direction LR
-            Heap["🗂️ Heap 堆<br/><i>默认, O(log n)</i>"]
-            TimeWheel["⚙️ TimeWheel 时间轮<br/><i>O(1), 多层级</i>"]
+            Heap["🗂️ Heap 堆<br/><i>优先队列, O(log n)</i>"]
         end
         
         Executor["🚀 Executor 执行器<br/><i>超时控制 · 重试逻辑 · Panic 恢复</i>"]
@@ -87,15 +85,12 @@ flowchart TB
     CronParser --> Task
     ConfigLoader --> Task
     Task --> Heap
-    Task --> TimeWheel
     Heap --> Executor
-    TimeWheel --> Executor
 
     style Scheduler fill:#f8f9fa,stroke:#343a40,stroke-width:2px
     style Task fill:#e7f3ff,stroke:#0066cc,stroke-width:2px
     style Executor fill:#d4edda,stroke:#28a745,stroke-width:2px
     style Heap fill:#fff3cd,stroke:#ffc107,stroke-width:1px
-    style TimeWheel fill:#fff3cd,stroke:#ffc107,stroke-width:1px
 ```
 
 ---
@@ -158,39 +153,7 @@ cron.WithYears()                    // 启用7字段cron
 
 ## 存储后端
 
-```go
-// Heap（默认）- 简单，适合少量任务
-scheduler := cron.NewScheduler()
-
-// TimeWheel - 高效，适合大量任务 (O(1) tick)
-scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-```
-
----
-
-## 从配置文件加载
-
-**config.yaml:**
-```yaml
-tasks:
-  - id: "backup"
-    cron_expr: "0 2 * * *"
-    func_name: "backupJob"
-    timeout: "1m"
-    retry: 2
-```
-
-**main.go:**
-```go
-cron.RegisterJob("backupJob", func() error {
-    return doBackup()
-})
-
-config, _ := cron.LoadFromYaml("config.yaml")
-scheduler := cron.NewScheduler()
-scheduler.LoadTasksFromConfig(config)
-scheduler.Start()
-```
+GoLiteCron 内部使用基于 Heap 的优先队列。实现更小、更可预测，同时保留高效的 `AddTask`、`RemoveTaskByID` 和 `Tick` 行为。
 
 ---
 
@@ -202,8 +165,8 @@ for _, task := range scheduler.GetTasks() {
     fmt.Printf("%s -> %s\n", task.ID, task.NextRunTime)
 }
 
-// 移除任务
-scheduler.RemoveTask(&cron.Task{ID: "task-id"})
+// 按 ID 移除任务
+scheduler.RemoveTaskByID("task-id")
 
 // 优雅关闭
 scheduler.Stop()

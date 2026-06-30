@@ -11,35 +11,26 @@ import (
 var benchExpressions = map[string]string{
 	"Simple":   "0 0 * * *",          // Every day at midnight
 	"Medium":   "*/15 9-17 * * 1-5",  // Every 15min during work hours on weekdays
-	"Complex":  "0 0,30 9-17 1,15 *", // Specific times on 1st and 15th
+	"Complex":  "0,30 9-17 1,15 * *", // Specific times on 1st and 15th
 	"Minutely": "* * * * *",          // Every minute
 	"Hourly":   "0 * * * *",          // Every hour
 }
 
 var benchExpressionsWithSeconds = map[string]string{
-	"EverySecond":  "* * * * * *",        // Every second
-	"Every10Sec":   "*/10 * * * * *",     // Every 10 seconds
-	"ComplexSec":   "0,30 */5 * * * *",   // 0 and 30 sec of every 5 min
-	"RangeSec":     "10-20 0 * * * *",    // Seconds 10-20 at minute 0
+	"EverySecond":  "* * * * * *",         // Every second
+	"Every10Sec":   "*/10 * * * * *",      // Every 10 seconds
+	"ComplexSec":   "0,30 */5 * * * *",    // 0 and 30 sec of every 5 min
+	"RangeSec":     "10-20 0 * * * *",     // Seconds 10-20 at minute 0
 	"WorkHoursSec": "0 */15 9-17 * * 1-5", // Every 15min during work hours
 }
 
-// Helper to create a scheduler and add a task, returning the task's CronParser
-func createParserViaScheduler(b *testing.B, expr string, opts ...golitecron.Option) *golitecron.CronParser {
+func createParser(b *testing.B, expr string, opts ...golitecron.ParseOption) *golitecron.CronParser {
 	b.Helper()
-	s := golitecron.NewScheduler()
-	job, err := golitecron.WrapJob("bench-job", func() error { return nil })
+	parser, err := golitecron.Parse(expr, opts...)
 	if err != nil {
-		b.Fatalf("failed to wrap job: %v", err)
+		b.Fatalf("failed to parse cron expression: %v", err)
 	}
-	if err := s.AddTask(expr, job, opts...); err != nil {
-		b.Fatalf("failed to add task: %v", err)
-	}
-	tasks := s.GetTasks()
-	if len(tasks) == 0 {
-		b.Fatal("no tasks found")
-	}
-	return tasks[0].CronParser
+	return parser
 }
 
 // ============================================================================
@@ -107,7 +98,7 @@ func BenchmarkParse_WithLocation(b *testing.B) {
 // ============================================================================
 
 func BenchmarkNext_Simple(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Simple"])
+	parser := createParser(b, benchExpressions["Simple"])
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -117,7 +108,7 @@ func BenchmarkNext_Simple(b *testing.B) {
 }
 
 func BenchmarkNext_Medium(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Medium"])
+	parser := createParser(b, benchExpressions["Medium"])
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -127,7 +118,7 @@ func BenchmarkNext_Medium(b *testing.B) {
 }
 
 func BenchmarkNext_Complex(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Complex"])
+	parser := createParser(b, benchExpressions["Complex"])
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -137,7 +128,7 @@ func BenchmarkNext_Complex(b *testing.B) {
 }
 
 func BenchmarkNext_Minutely(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Minutely"])
+	parser := createParser(b, benchExpressions["Minutely"])
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -147,7 +138,7 @@ func BenchmarkNext_Minutely(b *testing.B) {
 }
 
 func BenchmarkNext_WithSeconds(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressionsWithSeconds["Every10Sec"], golitecron.WithSeconds())
+	parser := createParser(b, benchExpressionsWithSeconds["Every10Sec"], golitecron.WithSeconds())
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -157,7 +148,7 @@ func BenchmarkNext_WithSeconds(b *testing.B) {
 }
 
 func BenchmarkNext_WithSeconds_Complex(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressionsWithSeconds["WorkHoursSec"], golitecron.WithSeconds())
+	parser := createParser(b, benchExpressionsWithSeconds["WorkHoursSec"], golitecron.WithSeconds())
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -171,7 +162,7 @@ func BenchmarkNext_WithSeconds_Complex(b *testing.B) {
 // ============================================================================
 
 func BenchmarkNext_Sequential_100(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Simple"])
+	parser := createParser(b, benchExpressions["Simple"])
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -183,7 +174,7 @@ func BenchmarkNext_Sequential_100(b *testing.B) {
 }
 
 func BenchmarkNext_Sequential_1000(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Simple"])
+	parser := createParser(b, benchExpressions["Simple"])
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -199,7 +190,7 @@ func BenchmarkNext_Sequential_1000(b *testing.B) {
 // ============================================================================
 
 func BenchmarkNext_Parallel(b *testing.B) {
-	parser := createParserViaScheduler(b, benchExpressions["Medium"])
+	parser := createParser(b, benchExpressions["Medium"])
 	now := time.Now()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -228,7 +219,7 @@ func BenchmarkParse_Parallel(b *testing.B) {
 // ============================================================================
 
 func BenchmarkNext_EndOfMonth(b *testing.B) {
-	parser := createParserViaScheduler(b, "0 0 28-31 * *") // Last days of month
+	parser := createParser(b, "0 0 28-31 * *") // Last days of month
 	// Start from a time near end of month
 	now := time.Date(2024, 1, 28, 0, 0, 0, 0, time.Local)
 	b.ReportAllocs()
@@ -239,7 +230,7 @@ func BenchmarkNext_EndOfMonth(b *testing.B) {
 }
 
 func BenchmarkNext_LeapYear(b *testing.B) {
-	parser := createParserViaScheduler(b, "0 0 29 2 *") // Feb 29
+	parser := createParser(b, "0 0 29 2 *") // Feb 29
 	now := time.Date(2024, 2, 1, 0, 0, 0, 0, time.Local)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -249,7 +240,7 @@ func BenchmarkNext_LeapYear(b *testing.B) {
 }
 
 func BenchmarkNext_YearBoundary(b *testing.B) {
-	parser := createParserViaScheduler(b, "0 0 1 1 *") // Jan 1
+	parser := createParser(b, "0 0 1 1 *") // Jan 1
 	now := time.Date(2024, 12, 31, 23, 59, 0, 0, time.Local)
 	b.ReportAllocs()
 	b.ResetTimer()

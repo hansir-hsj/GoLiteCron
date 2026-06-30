@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Test Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)](.)
 
-A lightweight, high-performance cron job scheduler for Go with fluent API, dual storage backends, and built-in timeout/retry.
+A lightweight, high-performance cron job scheduler for Go with fluent API, heap scheduling, and built-in timeout/retry.
 
 [中文文档](docs/readme.zh.md) | [Getting Started](docs/getting-started.md) | [API Reference](docs/api-reference.md)
 
@@ -15,7 +15,7 @@ A lightweight, high-performance cron job scheduler for Go with fluent API, dual 
 | Feature | GoLiteCron | robfig/cron |
 |---------|------------|-------------|
 | **Fluent API** | `Every(10).Seconds().Do(fn)` | Not supported |
-| **Storage Backends** | Heap + TimeWheel | Heap only |
+| **Storage Backend** | Heap priority queue | Heap only |
 | **Timeout & Retry** | Built-in | Manual implementation |
 | **Config Files** | YAML / JSON | Not supported |
 | **Cron Fields** | 5/6/7 fields (with years) | 5/6 fields |
@@ -75,9 +75,7 @@ flowchart TB
         Task["📋 Task<br/><code>ID, Job, NextRunTime</code>"]
         
         subgraph Storage["Storage Backend"]
-            direction LR
-            Heap["🗂️ Heap<br/><i>Default, O(log n)</i>"]
-            TimeWheel["⚙️ TimeWheel<br/><i>O(1), Multi-level</i>"]
+            Heap["🗂️ Heap<br/><i>Priority queue, O(log n)</i>"]
         end
         
         Executor["🚀 Executor<br/><i>Timeout Control · Retry Logic · Panic Recovery</i>"]
@@ -87,15 +85,12 @@ flowchart TB
     CronParser --> Task
     ConfigLoader --> Task
     Task --> Heap
-    Task --> TimeWheel
     Heap --> Executor
-    TimeWheel --> Executor
 
     style Scheduler fill:#f8f9fa,stroke:#343a40,stroke-width:2px
     style Task fill:#e7f3ff,stroke:#0066cc,stroke-width:2px
     style Executor fill:#d4edda,stroke:#28a745,stroke-width:2px
     style Heap fill:#fff3cd,stroke:#ffc107,stroke-width:1px
-    style TimeWheel fill:#fff3cd,stroke:#ffc107,stroke-width:1px
 ```
 
 ---
@@ -156,41 +151,9 @@ cron.WithYears()                    // Enable 7-field cron
 
 ---
 
-## Storage Backends
+## Storage Backend
 
-```go
-// Heap (default) - simple, good for fewer tasks
-scheduler := cron.NewScheduler()
-
-// TimeWheel - efficient for many tasks (O(1) tick)
-scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-```
-
----
-
-## Load from Config
-
-**config.yaml:**
-```yaml
-tasks:
-  - id: "backup"
-    cron_expr: "0 2 * * *"
-    func_name: "backupJob"
-    timeout: "1m"
-    retry: 2
-```
-
-**main.go:**
-```go
-cron.RegisterJob("backupJob", func() error {
-    return doBackup()
-})
-
-config, _ := cron.LoadFromYaml("config.yaml")
-scheduler := cron.NewScheduler()
-scheduler.LoadTasksFromConfig(config)
-scheduler.Start()
-```
+GoLiteCron uses a heap-backed priority queue internally. This keeps the scheduler implementation small and predictable while preserving efficient `AddTask`, `RemoveTaskByID`, and `Tick` behavior.
 
 ---
 
@@ -202,10 +165,10 @@ for _, task := range scheduler.GetTasks() {
     fmt.Printf("%s -> %s\n", task.ID, task.NextRunTime)
 }
 
-// Remove task
-scheduler.RemoveTask(&cron.Task{ID: "task-id"})
+// Remove task by ID
+scheduler.RemoveTaskByID("task-id")
 
-// Graceful shutdown
+// Stop scheduling new work
 scheduler.Stop()
 ```
 

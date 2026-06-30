@@ -8,23 +8,23 @@ import (
 	"time"
 )
 
-type FieldType int
+type fieldType int
 
 const (
-	Seconds FieldType = iota
-	Minutes
-	Hours
-	DayOfMonth
-	Months
-	DayOfWeek
-	Years
+	secondsField fieldType = iota
+	minutesField
+	hoursField
+	dayOfMonthField
+	monthsField
+	dayOfWeekField
+	yearsField
 )
 
 type parseRule struct {
-	field     FieldType
+	field     fieldType
 	min       int
 	max       int
-	parseFunc func(string, int, int, FieldType) (map[int]struct{}, error)
+	parseFunc func(string, int, int, fieldType) (map[int]struct{}, error)
 }
 
 type CronParser struct {
@@ -39,9 +39,6 @@ type CronParser struct {
 	enableSeconds bool
 	enableYears   bool
 	location      *time.Location
-	timeout       time.Duration
-	retry         int
-
 	// Pre-sorted slices for Next() field-jumping algorithm.
 	sortedSeconds []int
 	sortedMinutes []int
@@ -54,55 +51,132 @@ type CronParser struct {
 	dayOfWeekWildcard  bool
 }
 
-type Option func(*CronParser)
+// ParseOption configures cron expression parsing.
+type ParseOption interface {
+	applyParseOption(*taskSettings)
+}
 
-func WithSeconds() Option {
-	return func(p *CronParser) {
-		p.enableSeconds = true
+// TaskOption configures scheduled task parsing and execution policy.
+type TaskOption interface {
+	applyTaskOption(*taskSettings)
+}
+
+// ScheduleOption can be used for both parsing and task scheduling.
+type ScheduleOption interface {
+	ParseOption
+	TaskOption
+}
+
+type taskSettings struct {
+	enableSeconds bool
+	enableYears   bool
+	location      *time.Location
+	timeout       time.Duration
+	retry         int
+}
+
+type secondsOption struct{}
+
+func (secondsOption) applyParseOption(settings *taskSettings) {
+	settings.enableSeconds = true
+}
+
+func (secondsOption) applyTaskOption(settings *taskSettings) {
+	settings.enableSeconds = true
+}
+
+type yearsOption struct{}
+
+func (yearsOption) applyParseOption(settings *taskSettings) {
+	settings.enableYears = true
+}
+
+func (yearsOption) applyTaskOption(settings *taskSettings) {
+	settings.enableYears = true
+}
+
+type locationOption struct {
+	location *time.Location
+}
+
+func (opt locationOption) applyParseOption(settings *taskSettings) {
+	if opt.location == nil {
+		return
+	}
+	settings.location = opt.location
+}
+
+func (opt locationOption) applyTaskOption(settings *taskSettings) {
+	opt.applyParseOption(settings)
+}
+
+type timeoutOption struct {
+	timeout time.Duration
+}
+
+func (opt timeoutOption) applyTaskOption(settings *taskSettings) {
+	timeout := opt.timeout
+	if timeout < 0 {
+		timeout = 0
+	}
+	settings.timeout = timeout
+}
+
+type retryOption struct {
+	retry int
+}
+
+func (opt retryOption) applyTaskOption(settings *taskSettings) {
+	retry := opt.retry
+	if retry < 0 {
+		retry = 0
+	}
+	settings.retry = retry
+}
+
+func defaultTaskSettings() taskSettings {
+	return taskSettings{
+		location: time.Local,
 	}
 }
 
-func WithYears() Option {
-	return func(p *CronParser) {
-		p.enableYears = true
+func newParseSettings(opts ...ParseOption) taskSettings {
+	settings := defaultTaskSettings()
+	for _, opt := range opts {
+		opt.applyParseOption(&settings)
 	}
+	return settings
 }
 
-func WithLocation(loc *time.Location) Option {
-	return func(p *CronParser) {
-		p.location = loc
+func newTaskSettings(opts ...TaskOption) taskSettings {
+	settings := defaultTaskSettings()
+	for _, opt := range opts {
+		opt.applyTaskOption(&settings)
 	}
+	return settings
 }
 
-func WithTimeout(timeout time.Duration) Option {
-	return func(p *CronParser) {
-		if timeout < 0 {
-			timeout = 0
-		}
-		p.timeout = timeout
-	}
+func WithSeconds() ScheduleOption {
+	return secondsOption{}
 }
 
-func WithRetry(retry int) Option {
-	return func(p *CronParser) {
-		if retry < 0 {
-			retry = 0
-		}
-		p.retry = retry
-	}
+func WithYears() ScheduleOption {
+	return yearsOption{}
 }
 
-var defaultRules = []parseRule{
-	{Seconds, 0, 59, parseField},
-	{Minutes, 0, 59, parseField},
-	{Hours, 0, 23, parseField},
-	{DayOfMonth, 1, 31, parseField},
-	{Months, 1, 12, parseField},
-	{DayOfWeek, 0, 6, parseField},
-	{Years, 1970, 2099, parseField},
+func WithLocation(loc *time.Location) ScheduleOption {
+	return locationOption{location: loc}
 }
 
-func newCronParser(expr string, opts ...Option) (*CronParser, error) {
+func WithTimeout(timeout time.Duration) TaskOption {
+	return timeoutOption{timeout: timeout}
+}
+
+func WithRetry(retry int) TaskOption {
+	return retryOption{retry: retry}
+}
+
+func newCronParserFromSettings(expr string, settings taskSettings) (*CronParser, error) {
 	if strings.HasPrefix(expr, "@") {
 		switch expr {
 		case "@yearly", "@annually":
@@ -121,17 +195,16 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 	}
 
 	parser := &CronParser{
-		location: time.Local,
-	}
-	for _, opt := range opts {
-		opt(parser)
+		enableSeconds: settings.enableSeconds,
+		enableYears:   settings.enableYears,
+		location:      settings.location,
 	}
 
 	parts := strings.Fields(expr)
 	rules := make([]parseRule, 0, len(defaultRules))
 	for _, rule := range defaultRules {
-		if rule.field == Seconds && !parser.enableSeconds ||
-			rule.field == Years && !parser.enableYears {
+		if rule.field == secondsField && !parser.enableSeconds ||
+			rule.field == yearsField && !parser.enableYears {
 			continue
 		}
 		rules = append(rules, rule)
@@ -141,7 +214,7 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 		return nil, fmt.Errorf("invalid cron expression length: expected %d fields, got %d", len(rules), len(parts))
 	}
 
-	parsed := make(map[FieldType]map[int]struct{}, len(parts))
+	parsed := make(map[fieldType]map[int]struct{}, len(parts))
 	for i, part := range parts {
 		rule := rules[i]
 		vals, err := rule.parseFunc(part, rule.min, rule.max, rule.field)
@@ -153,24 +226,23 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 		}
 		parsed[rule.field] = vals
 
-		// Track wildcards for dayOfMonth/dayOfWeek OR logic
-		isWildcard := (part == "*" || part == "?")
+		isWildcard := part == "*" || part == "?"
 		switch rule.field {
-		case DayOfMonth:
+		case dayOfMonthField:
 			parser.dayOfMonthWildcard = isWildcard
-		case DayOfWeek:
+		case dayOfWeekField:
 			parser.dayOfWeekWildcard = isWildcard
 		}
 	}
 
-	fieldMap := map[FieldType]func(map[int]struct{}){
-		Seconds:    func(vals map[int]struct{}) { parser.seconds = vals },
-		Minutes:    func(vals map[int]struct{}) { parser.minutes = vals },
-		Hours:      func(vals map[int]struct{}) { parser.hours = vals },
-		DayOfMonth: func(vals map[int]struct{}) { parser.dayOfMonth = vals },
-		Months:     func(vals map[int]struct{}) { parser.months = vals },
-		DayOfWeek:  func(vals map[int]struct{}) { parser.dayOfWeek = vals },
-		Years:      func(vals map[int]struct{}) { parser.years = vals },
+	fieldMap := map[fieldType]func(map[int]struct{}){
+		secondsField:    func(vals map[int]struct{}) { parser.seconds = vals },
+		minutesField:    func(vals map[int]struct{}) { parser.minutes = vals },
+		hoursField:      func(vals map[int]struct{}) { parser.hours = vals },
+		dayOfMonthField: func(vals map[int]struct{}) { parser.dayOfMonth = vals },
+		monthsField:     func(vals map[int]struct{}) { parser.months = vals },
+		dayOfWeekField:  func(vals map[int]struct{}) { parser.dayOfWeek = vals },
+		yearsField:      func(vals map[int]struct{}) { parser.years = vals },
 	}
 
 	for f, v := range parsed {
@@ -182,159 +254,50 @@ func newCronParser(expr string, opts ...Option) (*CronParser, error) {
 	return parser, nil
 }
 
-func parseField(field string, min, max int, fieldType FieldType) (map[int]struct{}, error) {
+func newCronParser(expr string, opts ...ParseOption) (*CronParser, error) {
+	return newCronParserFromSettings(expr, newParseSettings(opts...))
+}
+
+// Parse parses a cron expression into a reusable schedule parser.
+func Parse(expr string, opts ...ParseOption) (*CronParser, error) {
+	return newCronParser(expr, opts...)
+}
+
+var defaultRules = []parseRule{
+	{secondsField, 0, 59, parseField},
+	{minutesField, 0, 59, parseField},
+	{hoursField, 0, 23, parseField},
+	{dayOfMonthField, 1, 31, parseField},
+	{monthsField, 1, 12, parseField},
+	{dayOfWeekField, 0, 6, parseField},
+	{yearsField, 1970, 2099, parseField},
+}
+
+func parseField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
 	if field == "*" || field == "?" {
-		result := make(map[int]struct{}, max-min+1)
-		for i := min; i <= max; i++ {
-			result[i] = struct{}{}
-		}
-		return result, nil
+		return parseWildcardField(min, max), nil
 	}
 
 	if strings.Contains(field, ",") {
-		parts := strings.Split(field, ",")
-		result := make(map[int]struct{})
-		for _, part := range parts {
-			nums, err := parseField(part, min, max, fieldType)
-			if err != nil {
-				return nil, err
-			}
-			for num := range nums {
-				result[num] = struct{}{}
-			}
-		}
-		return result, nil
+		return parseListField(field, min, max, fieldType)
 	}
 
 	// Check "/" before "-" because "10-30/5" contains both but should be handled as step
 	if strings.Contains(field, "/") {
-		parts := strings.Split(field, "/")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid step format: %s", field)
-		}
-
-		step, err := strconv.Atoi(parts[1])
-		if err != nil || step <= 0 {
-			return nil, fmt.Errorf("invalid step value: %s", parts[1])
-		}
-
-		// Determine the start and end values for the step
-		// Supports: */step, start-end/step, or just number/step
-		base := parts[0]
-		start := min
-		end := max
-
-		if base == "*" || base == "?" {
-			// */step: start from min, go to max
-			start = min
-			end = max
-		} else if strings.Contains(base, "-") {
-			// start-end/step: parse the range
-			rangeParts := strings.Split(base, "-")
-			if len(rangeParts) != 2 {
-				return nil, fmt.Errorf("invalid range format in step expression: %s", field)
-			}
-			start, err = strconv.Atoi(rangeParts[0])
-			if err != nil || start < min || start > max {
-				return nil, fmt.Errorf("invalid range start in step expression: %s", rangeParts[0])
-			}
-			end, err = strconv.Atoi(rangeParts[1])
-			if err != nil || end < min || end > max {
-				return nil, fmt.Errorf("invalid range end in step expression: %s", rangeParts[1])
-			}
-			if start > end {
-				return nil, fmt.Errorf("range start cannot be greater than end: %s", field)
-			}
-		} else {
-			// number/step: start from the number
-			start, err = strconv.Atoi(base)
-			if err != nil || start < min || start > max {
-				return nil, fmt.Errorf("invalid start value in step expression: %s", base)
-			}
-			end = max
-		}
-
-		// Generate values from start to end with given step
-		// No need to check if (end-start+1) % step == 0, standard cron allows any step
-		result := make(map[int]struct{})
-		for i := start; i <= end; i += step {
-			result[i] = struct{}{}
-		}
-
-		return result, nil
+		return parseStepField(field, min, max)
 	}
 
 	// Pure range without step (e.g., "10-30")
 	if strings.Contains(field, "-") {
-		parts := strings.Split(field, "-")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid range format: %s", field)
-		}
-
-		start, err := strconv.Atoi(parts[0])
-		if err != nil || start < min || start > max {
-			return nil, fmt.Errorf("invalid range start: %s", parts[0])
-		}
-
-		end, err := strconv.Atoi(parts[1])
-		if err != nil || end < min || end > max {
-			return nil, fmt.Errorf("invalid range end: %s", parts[1])
-		}
-
-		if start > end {
-			return nil, fmt.Errorf("range start cannot be greater than end: %s", field)
-		}
-
-		result := make(map[int]struct{}, end-start+1)
-		for i := start; i <= end; i++ {
-			result[i] = struct{}{}
-		}
-
-		return result, nil
+		return parseRangeField(field, min, max)
 	}
 
 	if strings.Contains(field, "L") {
-		if len(field) > 1 && !strings.HasSuffix(field, "L") {
-			return nil, fmt.Errorf("invalid 'L' format: %s", field)
-		}
-		if len(field) > 1 {
-			numStr := field[:len(field)-1]
-			num, err := strconv.Atoi(numStr)
-			if err != nil || num < min || num > max {
-				return nil, fmt.Errorf("invalid 'L' number: %s", numStr)
-			}
-			// For DayOfWeek, 'L' means the last occurrence of the day in the month
-			// We represent it as negative to differentiate from normal days
-			// e.g., 5L means the last Friday of the month
-			// This requires special handling in the scheduling logic
-			// Here we just return the negative value to indicate this
-			// The actual calculation will be done in the Next function
-			if fieldType == DayOfWeek {
-				return map[int]struct{}{-num: {}}, nil
-			}
-		}
-		if fieldType == DayOfMonth {
-			// 0 indicates the last day of the month
-			return map[int]struct{}{0: {}}, nil
-		}
-		return nil, fmt.Errorf("expression L not allowed in this field: %s", field)
+		return parseLastField(field, min, max, fieldType)
 	}
 
 	if strings.Contains(field, "W") {
-		if fieldType != DayOfMonth {
-			return nil, fmt.Errorf("expression W only allowed in DayOfMonth field: %s", field)
-		}
-		if !strings.HasSuffix(field, "W") || len(field) < 2 {
-			return nil, fmt.Errorf("invalid 'W' format: %s", field)
-		}
-		numStr := field[:len(field)-1]
-		num, err := strconv.Atoi(numStr)
-		if err != nil || num < min || num > max {
-			return nil, fmt.Errorf("invalid 'W' number: %s", numStr)
-		}
-		// 'W' means the nearest weekday (Monday to Friday) to the given day of the month
-		// -num indicates the nearest weekday
-		return map[int]struct{}{-num: {}}, nil
+		return parseNearestWeekdayField(field, min, max, fieldType)
 	}
 
 	num, err := strconv.Atoi(field)
@@ -343,6 +306,143 @@ func parseField(field string, min, max int, fieldType FieldType) (map[int]struct
 	}
 
 	return map[int]struct{}{num: {}}, nil
+}
+
+func parseWildcardField(min, max int) map[int]struct{} {
+	result := make(map[int]struct{}, max-min+1)
+	for i := min; i <= max; i++ {
+		result[i] = struct{}{}
+	}
+	return result
+}
+
+func parseListField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
+	parts := strings.Split(field, ",")
+	result := make(map[int]struct{})
+	for _, part := range parts {
+		nums, err := parseField(part, min, max, fieldType)
+		if err != nil {
+			return nil, err
+		}
+		for num := range nums {
+			result[num] = struct{}{}
+		}
+	}
+	return result, nil
+}
+
+func parseStepField(field string, min, max int) (map[int]struct{}, error) {
+	parts := strings.Split(field, "/")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid step format: %s", field)
+	}
+
+	step, err := strconv.Atoi(parts[1])
+	if err != nil || step <= 0 {
+		return nil, fmt.Errorf("invalid step value: %s", parts[1])
+	}
+
+	start, end, err := stepRange(parts[0], field, min, max)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[int]struct{})
+	for i := start; i <= end; i += step {
+		result[i] = struct{}{}
+	}
+	return result, nil
+}
+
+func stepRange(base string, field string, min, max int) (int, int, error) {
+	if base == "*" || base == "?" {
+		return min, max, nil
+	}
+	if strings.Contains(base, "-") {
+		start, end, err := parseRangeBounds(base, min, max, " in step expression")
+		if err != nil {
+			return 0, 0, err
+		}
+		if start > end {
+			return 0, 0, fmt.Errorf("range start cannot be greater than end: %s", field)
+		}
+		return start, end, nil
+	}
+
+	start, err := strconv.Atoi(base)
+	if err != nil || start < min || start > max {
+		return 0, 0, fmt.Errorf("invalid start value in step expression: %s", base)
+	}
+	return start, max, nil
+}
+
+func parseRangeField(field string, min, max int) (map[int]struct{}, error) {
+	start, end, err := parseRangeBounds(field, min, max, "")
+	if err != nil {
+		return nil, err
+	}
+	if start > end {
+		return nil, fmt.Errorf("range start cannot be greater than end: %s", field)
+	}
+
+	result := make(map[int]struct{}, end-start+1)
+	for i := start; i <= end; i++ {
+		result[i] = struct{}{}
+	}
+	return result, nil
+}
+
+func parseRangeBounds(field string, min, max int, context string) (int, int, error) {
+	parts := strings.Split(field, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid range format%s: %s", context, field)
+	}
+
+	start, err := strconv.Atoi(parts[0])
+	if err != nil || start < min || start > max {
+		return 0, 0, fmt.Errorf("invalid range start%s: %s", context, parts[0])
+	}
+
+	end, err := strconv.Atoi(parts[1])
+	if err != nil || end < min || end > max {
+		return 0, 0, fmt.Errorf("invalid range end%s: %s", context, parts[1])
+	}
+	return start, end, nil
+}
+
+func parseLastField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
+	if len(field) > 1 && !strings.HasSuffix(field, "L") {
+		return nil, fmt.Errorf("invalid 'L' format: %s", field)
+	}
+	if len(field) > 1 {
+		numStr := field[:len(field)-1]
+		num, err := strconv.Atoi(numStr)
+		if err != nil || num < min || num > max {
+			return nil, fmt.Errorf("invalid 'L' number: %s", numStr)
+		}
+		if fieldType == dayOfWeekField {
+			return map[int]struct{}{-num: {}}, nil
+		}
+	}
+	if fieldType == dayOfMonthField {
+		return map[int]struct{}{0: {}}, nil
+	}
+	return nil, fmt.Errorf("expression L not allowed in this field: %s", field)
+}
+
+func parseNearestWeekdayField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
+	if fieldType != dayOfMonthField {
+		return nil, fmt.Errorf("expression W only allowed in day-of-month field: %s", field)
+	}
+	if !strings.HasSuffix(field, "W") || len(field) < 2 {
+		return nil, fmt.Errorf("invalid 'W' format: %s", field)
+	}
+	numStr := field[:len(field)-1]
+	num, err := strconv.Atoi(numStr)
+	if err != nil || num < min || num > max {
+		return nil, fmt.Errorf("invalid 'W' number: %s", numStr)
+	}
+	return map[int]struct{}{-num: {}}, nil
 }
 
 func (p *CronParser) normalization() {
@@ -384,9 +484,12 @@ func (p *CronParser) Next(t time.Time) time.Time {
 	minute := t.Minute()
 	second := t.Second()
 
-	maxYear := year + 5
+	maxYear := year + 400
+	if p.enableYears && len(p.sortedYears) > 0 {
+		maxYear = p.sortedYears[len(p.sortedYears)-1]
+	}
 
-	for iteration := 0; iteration < 25; iteration++ {
+	for year <= maxYear {
 		// Year
 		if p.enableYears {
 			y, found := nextInSorted(p.sortedYears, year)
@@ -401,8 +504,6 @@ func (p *CronParser) Next(t time.Time) time.Time {
 				minute = p.sortedMinutes[0]
 				second = p.firstSecond()
 			}
-		} else if year > maxYear {
-			return time.Time{}
 		}
 
 		// Month

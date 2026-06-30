@@ -1,12 +1,13 @@
 package golitecron
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestScheduleBuilderBasicUnits(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	// 测试基本时间单位
 	testCases := []struct {
@@ -76,7 +77,7 @@ func TestScheduleBuilderBasicUnits(t *testing.T) {
 }
 
 func TestScheduleBuilderWeekdays(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	weekdayTests := []struct {
 		name     string
@@ -135,7 +136,7 @@ func TestScheduleBuilderWeekdays(t *testing.T) {
 }
 
 func TestScheduleBuilderWithTime(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	timeTests := []struct {
 		name     string
@@ -179,7 +180,7 @@ func TestScheduleBuilderWithTime(t *testing.T) {
 }
 
 func TestScheduleBuilderTimeSpecParsing(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 	builder := scheduler.Every().Day()
 
 	timeParseTests := []struct {
@@ -228,8 +229,28 @@ func TestScheduleBuilderTimeSpecParsing(t *testing.T) {
 	}
 }
 
+func TestScheduleBuilderRejectsNonPositiveIntervals(t *testing.T) {
+	scheduler := NewScheduler()
+
+	testCases := []struct {
+		name    string
+		builder *ScheduleBuilder
+	}{
+		{name: "zero interval", builder: scheduler.Every(0).Minutes()},
+		{name: "negative interval", builder: scheduler.Every(-5).Seconds()},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.builder.buildCronExpression(); err == nil {
+				t.Fatal("expected non-positive interval to be rejected")
+			}
+		})
+	}
+}
+
 func TestScheduleBuilderTaskIDGeneration(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	idTests := []struct {
 		name     string
@@ -280,7 +301,7 @@ func TestScheduleBuilderTaskIDGeneration(t *testing.T) {
 }
 
 func TestScheduleBuilderDoFunction(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	// 测试不同类型的job函数
 	// func() error
@@ -323,8 +344,76 @@ func TestScheduleBuilderDoFunction(t *testing.T) {
 	}
 }
 
+func TestScheduleBuilderDefaultIDsAreUnique(t *testing.T) {
+	scheduler := NewScheduler()
+
+	if err := scheduler.Every().Minute().Do(func() {}); err != nil {
+		t.Fatalf("first default-ID task failed: %v", err)
+	}
+	if err := scheduler.Every().Minute().Do(func() {}); err != nil {
+		t.Fatalf("second default-ID task should get a unique ID, got error: %v", err)
+	}
+
+	tasks := scheduler.GetTasks()
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	if tasks[0].ID == tasks[1].ID {
+		t.Fatalf("expected unique generated IDs, got duplicate %q", tasks[0].ID)
+	}
+}
+
+func TestScheduleBuilderConcurrentDefaultIDsAllSucceed(t *testing.T) {
+	scheduler := NewScheduler()
+
+	const count = 50
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- scheduler.Every().Minute().Do(func() {})
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("expected concurrent default-ID task to succeed, got %v", err)
+		}
+	}
+
+	tasks := scheduler.GetTasks()
+	if len(tasks) != count {
+		t.Fatalf("expected %d tasks, got %d", count, len(tasks))
+	}
+
+	seen := make(map[string]struct{}, count)
+	for _, task := range tasks {
+		if _, ok := seen[task.ID]; ok {
+			t.Fatalf("duplicate generated task ID %q", task.ID)
+		}
+		seen[task.ID] = struct{}{}
+	}
+}
+
+func TestScheduleBuilderExplicitDuplicateIDStillFails(t *testing.T) {
+	scheduler := NewScheduler()
+
+	if err := scheduler.Every().Minute().Do(func() {}, "explicit-id"); err != nil {
+		t.Fatalf("first explicit-ID task failed: %v", err)
+	}
+	if err := scheduler.Every().Minute().Do(func() {}, "explicit-id"); err == nil {
+		t.Fatal("expected duplicate explicit ID to fail")
+	}
+}
+
 func TestScheduleBuilderWithOptions(t *testing.T) {
-	scheduler := NewScheduler(StorageTypeHeap)
+	scheduler := NewScheduler()
 
 	shanghaiLoc, _ := time.LoadLocation("Asia/Shanghai")
 
@@ -350,14 +439,13 @@ func TestScheduleBuilderWithOptions(t *testing.T) {
 		t.Errorf("expected task ID %q, got %q", "options-test", task.ID)
 	}
 
-	// 验证cron解析器配置
-	if task.CronParser.timeout != 30*time.Second {
-		t.Errorf("expected timeout 30s, got %v", task.CronParser.timeout)
+	if task.Timeout != 30*time.Second {
+		t.Errorf("expected timeout 30s, got %v", task.Timeout)
 	}
-	if task.CronParser.retry != 3 {
-		t.Errorf("expected retry 3, got %d", task.CronParser.retry)
+	if task.Retry != 3 {
+		t.Errorf("expected retry 3, got %d", task.Retry)
 	}
-	if task.CronParser.location != shanghaiLoc {
-		t.Errorf("expected location Shanghai, got %v", task.CronParser.location)
+	if task.Location != shanghaiLoc {
+		t.Errorf("expected location Shanghai, got %v", task.Location)
 	}
 }

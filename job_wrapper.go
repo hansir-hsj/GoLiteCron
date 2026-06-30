@@ -21,6 +21,13 @@ func (fj *FuncJob) ID() string {
 	return fj.id
 }
 
+func setJobID(job Job, id string) Job {
+	if fj, ok := job.(*FuncJob); ok {
+		fj.id = id
+	}
+	return job
+}
+
 // WrapJob wraps a function as a Job. Supports func() error or func(context.Context) error.
 func WrapJob(id string, fn any) (Job, error) {
 	switch f := fn.(type) {

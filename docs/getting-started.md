@@ -36,9 +36,6 @@ func main() {
     // Default scheduler with Heap storage
     scheduler := cron.NewScheduler()
     
-    // Or use TimeWheel for better performance with many tasks
-    scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-    
     // Add tasks...
     
     scheduler.Start()
@@ -278,7 +275,10 @@ scheduler.AddTask("@minutely", job)  // * * * * * - Every minute
 
 ### WithTimeout
 
-Limits task execution time. Task is cancelled if it exceeds the timeout.
+Limits how long the scheduler waits for a task execution. The task receives a
+context with a deadline; functions that accept `context.Context` should stop
+when `ctx.Done()` is closed. If a task ignores the context, it may continue
+running in the background until its function returns naturally.
 
 ```go
 scheduler.AddTask("*/5 * * * *", job, cron.WithTimeout(30*time.Second))
@@ -387,17 +387,17 @@ import (
 
 func main() {
     // Register job functions first
-    cron.RegisterJob("backupDatabase", func() error {
+    scheduler.RegisterJob("backupDatabase", func() error {
         fmt.Println("Backing up database...")
         return nil
     })
 
-    cron.RegisterJob("syncData", func() error {
+    scheduler.RegisterJob("syncData", func() error {
         fmt.Println("Syncing data...")
         return nil
     })
 
-    cron.RegisterJob("healthCheck", func() error {
+    scheduler.RegisterJob("healthCheck", func() error {
         fmt.Println("Health check...")
         return nil
     })
@@ -435,19 +435,18 @@ for _, task := range tasks {
 }
 ```
 
-### Getting Task Info
+### Getting One Task
 
 ```go
-info := scheduler.GetTaskInfo("my-task-id")
-fmt.Println(info)
-// Output: Task ID: my-task-id, Pre Run Time: 2024-01-01T10:00:00Z, Next Run Time: 2024-01-01T11:00:00Z
+if task, ok := scheduler.GetTask("my-task-id"); ok {
+    fmt.Printf("Next run: %s\n", task.NextRunTime.Format(time.RFC3339))
+}
 ```
 
 ### Removing Tasks
 
 ```go
-task := &cron.Task{ID: "task-to-remove"}
-removed := scheduler.RemoveTask(task)
+removed := scheduler.RemoveTaskByID("task-to-remove")
 if removed {
     fmt.Println("Task removed successfully")
 } else {
@@ -455,25 +454,28 @@ if removed {
 }
 ```
 
+`RemoveTaskByID` is the recommended removal method. It also prevents a task
+that is already running from being rescheduled after it finishes. `GetTasks()` returns read-only `TaskInfo` snapshots; remove tasks by ID.
+
 ### Starting and Stopping
 
 ```go
 // Start the scheduler
 scheduler.Start()
 
-// Stop gracefully (waits for running tasks to complete)
+// Stop scheduling new work
 scheduler.Stop()
+
+// Or wait for running tasks
+_ = scheduler.Shutdown(context.Background())
 ```
 
 ## Best Practices
 
-1. **Choose the right storage backend**
-   - Use `StorageTypeHeap` (default) for simple applications with few tasks
-   - Use `StorageTypeTimeWheel` for high-performance scenarios with many tasks
-
-2. **Set appropriate timeouts**
+1. **Set appropriate timeouts**
    - Always set timeouts to prevent tasks from running indefinitely
    - Consider the expected execution time and add some buffer
+   - Prefer `func(context.Context) error` jobs and check `ctx.Done()` in long-running work
 
 3. **Use retry wisely**
    - Set retries for tasks that may fail due to transient errors
@@ -492,8 +494,9 @@ scheduler.Stop()
    - Use UTC for consistency across servers
 
 7. **Graceful shutdown**
-   - Always call `scheduler.Stop()` before exiting
-   - Running tasks will be allowed to complete
+   - Use `scheduler.Stop()` to stop scheduling new work without waiting for running tasks
+   - Use `scheduler.Shutdown(ctx)` when you need to cancel context-aware jobs and wait for tracked tasks
+   - A timed-out or shutdown-canceled job that ignores `context.Context` may continue outside the scheduler's wait
 
 ## Examples
 

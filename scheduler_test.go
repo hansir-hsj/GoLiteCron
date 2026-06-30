@@ -2,7 +2,6 @@ package golitecron
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 )
@@ -60,20 +59,77 @@ func TestNewScheduler_AddGetRemove(t *testing.T) {
 		t.Fatalf("expected task ID job1, got %s", tasks[0].ID)
 	}
 
-	info := s.GetTaskInfo("job1")
-	if !strings.Contains(info, "job1") {
-		t.Fatalf("GetTaskInfo did not contain job id: %s", info)
+	info, ok := s.GetTask("job1")
+	if !ok {
+		t.Fatal("expected GetTask to find job1")
+	}
+	if info.ID != "job1" {
+		t.Fatalf("expected task ID job1, got %s", info.ID)
 	}
 
-	// RemoveTask should return true when task exists and is removed
-	removed := s.RemoveTask(tasks[0])
+	removed := s.RemoveTaskByID(tasks[0].ID)
 	if removed != true {
-		t.Fatalf("RemoveTask returned %v, expected true", removed)
+		t.Fatalf("RemoveTaskByID returned %v, expected true", removed)
 	}
 
 	// underlying storage should no longer have the task
 	if s.taskStorage.TaskExist("job1") {
 		t.Fatalf("expected task to be removed from storage")
+	}
+}
+
+func TestScheduler_GetTasksReturnsReadOnlySnapshots(t *testing.T) {
+	s := NewScheduler()
+	job := &testJob{id: "snapshot-job", runCh: make(chan struct{}, 1)}
+
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	tasks := s.GetTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+
+	tasks[0].ID = "mutated"
+	tasks[0].NextRunTime = time.Now().UTC().Add(24 * time.Hour)
+
+	if !s.RemoveTaskByID("snapshot-job") {
+		t.Fatal("expected original task ID to remain removable after mutating returned task snapshot")
+	}
+	if s.taskStorage.TaskExist("snapshot-job") {
+		t.Fatal("expected original task to be removed")
+	}
+}
+
+func TestScheduler_AddTaskNilJobReturnsError(t *testing.T) {
+	s := NewScheduler()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("AddTask should return an error for nil job, not panic: %v", r)
+		}
+	}()
+
+	if err := s.AddTask("* * * * *", nil); err == nil {
+		t.Fatal("expected error for nil job")
+	}
+}
+
+func TestScheduler_AddTaskWithNilLocationUsesLocal(t *testing.T) {
+	s := NewScheduler()
+	job := &testJob{id: "nil-location", runCh: make(chan struct{}, 1)}
+
+	if err := s.AddTask("* * * * *", job, WithLocation(nil)); err != nil {
+		t.Fatalf("AddTask should accept nil location by falling back to local: %v", err)
+	}
+
+	tasks := s.GetTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(tasks))
+	}
+	if tasks[0].Location != time.Local {
+		t.Fatalf("expected local location, got %v", tasks[0].Location)
 	}
 }
 

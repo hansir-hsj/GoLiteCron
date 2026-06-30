@@ -60,10 +60,7 @@ func BenchmarkComparison_Parse_Complex_RobfigCron(b *testing.B) {
 // ============================================================================
 
 func BenchmarkComparison_Next_Simple_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("0 0 * * *", job)
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("0 0 * * *")
 	now := time.Now()
 
 	b.ReportAllocs()
@@ -86,10 +83,7 @@ func BenchmarkComparison_Next_Simple_RobfigCron(b *testing.B) {
 }
 
 func BenchmarkComparison_Next_Complex_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("*/15 9-17 * * 1-5", job)
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("*/15 9-17 * * 1-5")
 	now := time.Now()
 
 	b.ReportAllocs()
@@ -112,10 +106,7 @@ func BenchmarkComparison_Next_Complex_RobfigCron(b *testing.B) {
 }
 
 func BenchmarkComparison_Next_Minutely_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("* * * * *", job)
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("* * * * *")
 	now := time.Now()
 
 	b.ReportAllocs()
@@ -142,10 +133,7 @@ func BenchmarkComparison_Next_Minutely_RobfigCron(b *testing.B) {
 // ============================================================================
 
 func BenchmarkComparison_NextSequential100_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("0 0 * * *", job)
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("0 0 * * *")
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -274,10 +262,7 @@ func BenchmarkComparison_Parse_WithSeconds_RobfigCron(b *testing.B) {
 }
 
 func BenchmarkComparison_Next_WithSeconds_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("*/10 * * * * *", job, golitecron.WithSeconds())
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("*/10 * * * * *", golitecron.WithSeconds())
 	now := time.Now()
 
 	b.ReportAllocs()
@@ -304,10 +289,7 @@ func BenchmarkComparison_Next_WithSeconds_RobfigCron(b *testing.B) {
 // ============================================================================
 
 func BenchmarkComparison_Next_Parallel_GoLiteCron(b *testing.B) {
-	s := golitecron.NewScheduler()
-	job, _ := golitecron.WrapJob("bench", func() error { return nil })
-	_ = s.AddTask("*/15 9-17 * * 1-5", job)
-	parser := s.GetTasks()[0].CronParser
+	parser, _ := golitecron.Parse("*/15 9-17 * * 1-5")
 	now := time.Now()
 
 	b.ReportAllocs()

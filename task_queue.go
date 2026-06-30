@@ -2,43 +2,44 @@ package golitecron
 
 import (
 	"container/heap"
+	"sort"
 	"sync"
 	"time"
 )
 
-type TaskQueue struct {
-	tasks   []*Task
+type taskQueue struct {
+	tasks   []*task
 	taskIdx map[string]int // task ID -> index in heap
 	mu      sync.RWMutex
 }
 
-func NewTaskQueue() *TaskQueue {
-	tq := &TaskQueue{taskIdx: make(map[string]int)}
+func newTaskQueue() *taskQueue {
+	tq := &taskQueue{taskIdx: make(map[string]int)}
 	heap.Init(tq)
 	return tq
 }
 
-func (tq *TaskQueue) Len() int {
+func (tq *taskQueue) Len() int {
 	return len(tq.tasks)
 }
 
-func (tq *TaskQueue) Less(i, j int) bool {
+func (tq *taskQueue) Less(i, j int) bool {
 	return tq.tasks[i].NextRunTime.Before(tq.tasks[j].NextRunTime)
 }
 
-func (tq *TaskQueue) Swap(i, j int) {
+func (tq *taskQueue) Swap(i, j int) {
 	tq.tasks[i], tq.tasks[j] = tq.tasks[j], tq.tasks[i]
 	tq.taskIdx[tq.tasks[i].ID] = i
 	tq.taskIdx[tq.tasks[j].ID] = j
 }
 
-func (tq *TaskQueue) Push(task any) {
-	t := task.(*Task)
+func (tq *taskQueue) Push(value any) {
+	t := value.(*task)
 	tq.taskIdx[t.ID] = len(tq.tasks)
 	tq.tasks = append(tq.tasks, t)
 }
 
-func (tq *TaskQueue) Pop() any {
+func (tq *taskQueue) Pop() any {
 	if len(tq.tasks) == 0 {
 		return nil
 	}
@@ -48,7 +49,7 @@ func (tq *TaskQueue) Pop() any {
 	return task
 }
 
-func (tq *TaskQueue) TaskExist(taskID string) bool {
+func (tq *taskQueue) TaskExist(taskID string) bool {
 	tq.mu.RLock()
 	defer tq.mu.RUnlock()
 
@@ -56,32 +57,40 @@ func (tq *TaskQueue) TaskExist(taskID string) bool {
 	return exists
 }
 
-func (tq *TaskQueue) AddTask(task *Task) {
+func (tq *taskQueue) AddTask(task *task) {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
 
 	heap.Push(tq, task)
 }
 
-func (tq *TaskQueue) GetTasks() []*Task {
+func (tq *taskQueue) GetTasks() []TaskInfo {
 	tq.mu.RLock()
 	defer tq.mu.RUnlock()
 
-	tasks := make([]*Task, len(tq.tasks))
-	copy(tasks, tq.tasks)
+	tasks := make([]TaskInfo, 0, len(tq.tasks))
+	for _, task := range tq.tasks {
+		tasks = append(tasks, newTaskInfo(task))
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].NextRunTime.Equal(tasks[j].NextRunTime) {
+			return tasks[i].ID < tasks[j].ID
+		}
+		return tasks[i].NextRunTime.Before(tasks[j].NextRunTime)
+	})
 	return tasks
 }
 
-func (tq *TaskQueue) RemoveTask(task *Task) {
+func (tq *taskQueue) RemoveTaskByID(taskID string) {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
 
-	if idx, ok := tq.taskIdx[task.ID]; ok {
+	if idx, ok := tq.taskIdx[taskID]; ok {
 		heap.Remove(tq, idx)
 	}
 }
 
-func (tq *TaskQueue) Tick(now time.Time) []*Task {
+func (tq *taskQueue) Tick(now time.Time) []*task {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
 
@@ -90,14 +99,14 @@ func (tq *TaskQueue) Tick(now time.Time) []*Task {
 	}
 
 	nowUTC := now.UTC()
-	tasks := make([]*Task, 0)
+	tasks := make([]*task, 0)
 
 	for tq.Len() > 0 {
 		top := tq.tasks[0]
 		if top.NextRunTime.UTC().After(nowUTC) {
 			break
 		}
-		tasks = append(tasks, heap.Pop(tq).(*Task))
+		tasks = append(tasks, heap.Pop(tq).(*task))
 	}
 
 	return tasks

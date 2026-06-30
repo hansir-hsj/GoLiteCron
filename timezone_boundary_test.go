@@ -22,13 +22,9 @@ func TestTimezone_DSTSpringForward(t *testing.T) {
 	// Test scheduling at 2:30 AM which doesn't exist on this day
 	beforeDST := time.Date(2024, 3, 10, 1, 30, 0, 0, loc)
 
-	s := NewScheduler()
-	job, _ := WrapJob("dst-spring", func() error { return nil })
 	// Schedule for 2:30 AM - this time doesn't exist on DST day
-	_ = s.AddTask("30 2 * * *", job, WithLocation(loc))
-
-	task := s.GetTasks()[0]
-	next := task.CronParser.Next(beforeDST)
+	parser := mustCronParser(t, "30 2 * * *", WithLocation(loc))
+	next := parser.Next(beforeDST)
 
 	// The scheduler should handle this gracefully
 	// Either skip to 3:00+ on the same day, or schedule for next day
@@ -56,12 +52,8 @@ func TestTimezone_DSTFallBack(t *testing.T) {
 	// 1:30 AM occurs twice on this day
 	beforeFallBack := time.Date(2024, 11, 3, 0, 30, 0, 0, loc)
 
-	s := NewScheduler()
-	job, _ := WrapJob("dst-fall", func() error { return nil })
-	_ = s.AddTask("30 1 * * *", job, WithLocation(loc)) // 1:30 AM daily
-
-	task := s.GetTasks()[0]
-	first := task.CronParser.Next(beforeFallBack)
+	parser := mustCronParser(t, "30 1 * * *", WithLocation(loc))
+	first := parser.Next(beforeFallBack)
 
 	t.Logf("Before fall back: %v", beforeFallBack)
 	t.Logf("First 1:30 AM: %v", first)
@@ -85,12 +77,8 @@ func TestTimezone_DSTTransition_Europe(t *testing.T) {
 	// 2024-03-31 is DST start in UK (1:00 AM -> 2:00 AM)
 	beforeDST := time.Date(2024, 3, 31, 0, 30, 0, 0, loc)
 
-	s := NewScheduler()
-	job, _ := WrapJob("dst-europe", func() error { return nil })
-	_ = s.AddTask("30 1 * * *", job, WithLocation(loc)) // 1:30 AM doesn't exist
-
-	task := s.GetTasks()[0]
-	next := task.CronParser.Next(beforeDST)
+	parser := mustCronParser(t, "30 1 * * *", WithLocation(loc))
+	next := parser.Next(beforeDST)
 
 	t.Logf("Before UK DST: %v", beforeDST)
 	t.Logf("Next scheduled: %v", next)
@@ -127,16 +115,10 @@ func TestTimezone_CrossDateLine(t *testing.T) {
 	t.Logf("Pago Pago (UTC-11): %v", pagoTime)
 
 	// Schedule daily at midnight in both timezones
-	s1 := NewScheduler()
-	job1, _ := WrapJob("auckland", func() error { return nil })
-	_ = s1.AddTask("0 0 * * *", job1, WithLocation(auckland))
-
-	s2 := NewScheduler()
-	job2, _ := WrapJob("pagopago", func() error { return nil })
-	_ = s2.AddTask("0 0 * * *", job2, WithLocation(pagoPago))
-
-	next1 := s1.GetTasks()[0].CronParser.Next(aucklandTime)
-	next2 := s2.GetTasks()[0].CronParser.Next(pagoTime)
+	aucklandParser := mustCronParser(t, "0 0 * * *", WithLocation(auckland))
+	pagoParser := mustCronParser(t, "0 0 * * *", WithLocation(pagoPago))
+	next1 := aucklandParser.Next(aucklandTime)
+	next2 := pagoParser.Next(pagoTime)
 
 	t.Logf("Next midnight Auckland: %v", next1)
 	t.Logf("Next midnight Pago Pago: %v", next2)
@@ -169,12 +151,8 @@ func TestTimezone_HalfHourOffset(t *testing.T) {
 			}
 
 			now := time.Now().In(loc)
-			s := NewScheduler()
-			job, _ := WrapJob(tc.name, func() error { return nil })
-			_ = s.AddTask("*/15 * * * *", job, WithLocation(loc)) // Every 15 min
-
-			task := s.GetTasks()[0]
-			next := task.CronParser.Next(now)
+			parser := mustCronParser(t, "*/15 * * * *", WithLocation(loc))
+			next := parser.Next(now)
 
 			t.Logf("%s (%s): now=%v, next=%v", tc.name, tc.offset, now.Format(time.RFC3339), next.Format(time.RFC3339))
 
@@ -200,12 +178,8 @@ func TestTimezone_QuarterHourOffset(t *testing.T) {
 	}
 
 	now := time.Now().In(loc)
-	s := NewScheduler()
-	job, _ := WrapJob("nepal", func() error { return nil })
-	_ = s.AddTask("0 * * * *", job, WithLocation(loc)) // Every hour
-
-	task := s.GetTasks()[0]
-	next := task.CronParser.Next(now)
+	parser := mustCronParser(t, "0 * * * *", WithLocation(loc))
+	next := parser.Next(now)
 
 	t.Logf("Nepal (UTC+5:45): now=%v, next=%v", now.Format(time.RFC3339), next.Format(time.RFC3339))
 
@@ -239,12 +213,8 @@ func TestTimezone_UTC_Extremes(t *testing.T) {
 			}
 
 			localTime := baseTime.In(loc)
-			s := NewScheduler()
-			job, _ := WrapJob(tc.name, func() error { return nil })
-			_ = s.AddTask("0 0 * * *", job, WithLocation(loc)) // Daily midnight
-
-			task := s.GetTasks()[0]
-			next := task.CronParser.Next(localTime)
+			parser := mustCronParser(t, "0 0 * * *", WithLocation(loc))
+			next := parser.Next(localTime)
 
 			t.Logf("%s: local=%v, next=%v", tc.name, localTime.Format(time.RFC3339), next.Format(time.RFC3339))
 
@@ -267,17 +237,11 @@ func TestTimezone_SwitchDuringCalculation(t *testing.T) {
 	// Same UTC time
 	utcTime := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
 
-	// Create two schedulers with different timezones
-	s1 := NewScheduler()
-	job1, _ := WrapJob("tokyo", func() error { return nil })
-	_ = s1.AddTask("0 9 * * *", job1, WithLocation(tokyo)) // 9 AM Tokyo
-
-	s2 := NewScheduler()
-	job2, _ := WrapJob("newyork", func() error { return nil })
-	_ = s2.AddTask("0 9 * * *", job2, WithLocation(newYork)) // 9 AM New York
-
-	next1 := s1.GetTasks()[0].CronParser.Next(utcTime.In(tokyo))
-	next2 := s2.GetTasks()[0].CronParser.Next(utcTime.In(newYork))
+	// Create two parsers with different timezones
+	tokyoParser := mustCronParser(t, "0 9 * * *", WithLocation(tokyo))
+	newYorkParser := mustCronParser(t, "0 9 * * *", WithLocation(newYork))
+	next1 := tokyoParser.Next(utcTime.In(tokyo))
+	next2 := newYorkParser.Next(utcTime.In(newYork))
 
 	t.Logf("Tokyo 9AM next: %v (UTC: %v)", next1, next1.UTC())
 	t.Logf("New York 9AM next: %v (UTC: %v)", next2, next2.UTC())
@@ -293,16 +257,12 @@ func TestTimezone_LocationConsistency(t *testing.T) {
 	loc, _ := time.LoadLocation("Europe/Paris")
 	now := time.Now().In(loc)
 
-	s := NewScheduler()
-	job, _ := WrapJob("paris", func() error { return nil })
-	_ = s.AddTask("*/5 * * * *", job, WithLocation(loc))
-
-	task := s.GetTasks()[0]
+	parser := mustCronParser(t, "*/5 * * * *", WithLocation(loc))
 
 	// Call Next() multiple times
 	current := now
 	for i := 0; i < 10; i++ {
-		next := task.CronParser.Next(current)
+		next := parser.Next(current)
 		if next.Location().String() != loc.String() {
 			t.Errorf("Iteration %d: Location changed from %s to %s",
 				i, loc.String(), next.Location().String())
@@ -329,16 +289,10 @@ func TestTimezone_NewYearCrossing(t *testing.T) {
 	t.Logf("LA (same instant): %v", laTime)
 
 	// Schedule for Jan 1 midnight
-	s1 := NewScheduler()
-	job1, _ := WrapJob("sydney-newyear", func() error { return nil })
-	_ = s1.AddTask("0 0 1 1 *", job1, WithLocation(sydney))
-
-	s2 := NewScheduler()
-	job2, _ := WrapJob("la-newyear", func() error { return nil })
-	_ = s2.AddTask("0 0 1 1 *", job2, WithLocation(losAngeles))
-
-	nextSydney := s1.GetTasks()[0].CronParser.Next(sydneyTime)
-	nextLA := s2.GetTasks()[0].CronParser.Next(laTime)
+	sydneyParser := mustCronParser(t, "0 0 1 1 *", WithLocation(sydney))
+	laParser := mustCronParser(t, "0 0 1 1 *", WithLocation(losAngeles))
+	nextSydney := sydneyParser.Next(sydneyTime)
+	nextLA := laParser.Next(laTime)
 
 	t.Logf("Next Sydney New Year: %v", nextSydney)
 	t.Logf("Next LA New Year: %v", nextLA)
@@ -360,11 +314,8 @@ func TestTimezone_MonthEndDifferentZones(t *testing.T) {
 	// Jan 31 23:00 Tokyo
 	tokyoTime := time.Date(2024, 1, 31, 23, 0, 0, 0, tokyo)
 
-	s := NewScheduler()
-	job, _ := WrapJob("month-end", func() error { return nil })
-	_ = s.AddTask("0 0 1 * *", job, WithLocation(tokyo)) // First of each month
-
-	next := s.GetTasks()[0].CronParser.Next(tokyoTime)
+	parser := mustCronParser(t, "0 0 1 * *", WithLocation(tokyo))
+	next := parser.Next(tokyoTime)
 
 	t.Logf("Tokyo Jan 31 23:00: %v", tokyoTime)
 	t.Logf("Next first of month: %v", next)
@@ -380,12 +331,8 @@ func TestTimezone_WithSeconds(t *testing.T) {
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	now := time.Now().In(berlin)
 
-	s := NewScheduler()
-	job, _ := WrapJob("berlin-seconds", func() error { return nil })
-	_ = s.AddTask("*/10 * * * * *", job, WithSeconds(), WithLocation(berlin))
-
-	task := s.GetTasks()[0]
-	next := task.CronParser.Next(now)
+	parser := mustCronParser(t, "*/10 * * * * *", WithSeconds(), WithLocation(berlin))
+	next := parser.Next(now)
 
 	t.Logf("Berlin now: %v", now)
 	t.Logf("Next (every 10 sec): %v", next)

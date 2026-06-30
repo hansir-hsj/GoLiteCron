@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -64,6 +65,39 @@ func TestTask_TimeoutExecution(t *testing.T) {
 	}
 	// Note: taskCompleted might be 0 or non-zero depending on goroutine scheduling
 	// The important thing is the scheduler didn't hang
+}
+
+// TestTask_TimeoutDoesNotWaitForContextIgnoringJob documents timeout semantics:
+// the scheduler stops waiting at the timeout, but a job that ignores ctx may
+// continue running until its function naturally returns.
+func TestTask_TimeoutDoesNotWaitForContextIgnoringJob(t *testing.T) {
+	s := NewScheduler()
+
+	taskCompleted := make(chan struct{})
+	job, _ := WrapJob("timeout-context-ignored", func() error {
+		time.Sleep(500 * time.Millisecond)
+		close(taskCompleted)
+		return nil
+	})
+
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithTimeout(50*time.Millisecond), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+	time.Sleep(1200 * time.Millisecond)
+
+	stopStart := time.Now()
+	s.Stop()
+	if elapsed := time.Since(stopStart); elapsed > 300*time.Millisecond {
+		t.Fatalf("Stop should not wait for context-ignoring timed-out job, took %v", elapsed)
+	}
+
+	select {
+	case <-taskCompleted:
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected context-ignoring job to finish naturally after timeout")
+	}
 }
 
 // TestTask_TimeoutSkipsRetry tests that timeout skips retries
@@ -143,7 +177,6 @@ func TestTask_RemoveDuringExecution(t *testing.T) {
 	executionCount := int32(0)
 	taskStarted := make(chan struct{}, 1)
 	removeConfirmed := make(chan struct{})
-	var taskRef *Task
 
 	job, _ := WrapJob("remove-during-exec", func() error {
 		count := atomic.AddInt32(&executionCount, 1)
@@ -163,19 +196,6 @@ func TestTask_RemoveDuringExecution(t *testing.T) {
 		t.Fatalf("AddTask failed: %v", err)
 	}
 
-	// Get task reference BEFORE starting scheduler
-	tasks := s.GetTasks()
-	for _, task := range tasks {
-		if task.ID == "remove-during-exec" {
-			taskRef = task
-			break
-		}
-	}
-
-	if taskRef == nil {
-		t.Fatal("failed to get task reference")
-	}
-
 	s.Start()
 
 	// Wait for first execution to start
@@ -186,7 +206,7 @@ func TestTask_RemoveDuringExecution(t *testing.T) {
 	}
 
 	// Remove task during execution (while it's waiting on removeConfirmed)
-	s.RemoveTask(taskRef)
+	s.RemoveTaskByID("remove-during-exec")
 
 	// Now let the task continue
 	close(removeConfirmed)
@@ -283,7 +303,9 @@ func TestTask_SuccessfulExecution(t *testing.T) {
 
 	s.Start()
 	time.Sleep(2500 * time.Millisecond)
-	s.Stop()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
 
 	close(results)
 

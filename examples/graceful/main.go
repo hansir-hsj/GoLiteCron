@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -30,6 +31,11 @@ func main() {
 	<-quit
 
 	fmt.Println("\nShutting down gracefully...")
-	s.Stop() // Waits for running tasks to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		fmt.Printf("Scheduler shutdown timed out: %v\n", err)
+		return
+	}
 	fmt.Println("Scheduler stopped.")
 }

@@ -145,6 +145,21 @@ func TestCron_WithYearsRange(t *testing.T) {
 	}
 }
 
+func TestCron_WithYearsFarFutureWithinSupportedRange(t *testing.T) {
+	parser, err := newCronParser("0 0 1 1 * 2035", WithYears(), WithLocation(time.UTC))
+	if err != nil {
+		t.Fatalf("failed to create parser: %v", err)
+	}
+
+	start := time.Date(2026, time.June, 28, 0, 0, 0, 0, time.UTC)
+	next := parser.Next(start)
+
+	expected := time.Date(2035, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if !next.Equal(expected) {
+		t.Errorf("expected %v, got %v", expected, next)
+	}
+}
+
 // TestCron_InvalidExpressionReturnsZero tests that impossible expressions return zero
 func TestCron_InvalidExpressionReturnsZero(t *testing.T) {
 	// Feb 30 never exists

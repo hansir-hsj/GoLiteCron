@@ -36,9 +36,6 @@ func main() {
     // 默认使用 Heap 存储
     scheduler := cron.NewScheduler()
     
-    // 或使用 TimeWheel 以获得更好的大量任务性能
-    scheduler := cron.NewScheduler(cron.StorageTypeTimeWheel)
-    
     // 添加任务...
     
     scheduler.Start()
@@ -266,7 +263,8 @@ scheduler.AddTask("@minutely", job)  // * * * * * - 每分钟
 
 ### WithTimeout
 
-限制任务执行时间。如果超时，任务将被取消。
+限制调度器等待任务执行的时间。任务会收到一个带截止时间的 context；接收 `context.Context`
+的函数应在 `ctx.Done()` 关闭时停止。如果任务忽略 context，它可能会在后台继续运行，直到函数自然返回。
 
 ```go
 scheduler.AddTask("*/5 * * * *", job, cron.WithTimeout(30*time.Second))
@@ -345,12 +343,12 @@ import (
 
 func main() {
     // 首先注册任务函数
-    cron.RegisterJob("backupDatabase", func() error {
+    scheduler.RegisterJob("backupDatabase", func() error {
         fmt.Println("备份数据库...")
         return nil
     })
 
-    cron.RegisterJob("syncData", func() error {
+    scheduler.RegisterJob("syncData", func() error {
         fmt.Println("同步数据...")
         return nil
     })
@@ -387,18 +385,18 @@ for _, task := range tasks {
 }
 ```
 
-### 获取任务信息
+### 获取单个任务
 
 ```go
-info := scheduler.GetTaskInfo("my-task-id")
-fmt.Println(info)
+if task, ok := scheduler.GetTask("my-task-id"); ok {
+    fmt.Printf("下次运行: %s\n", task.NextRunTime.Format(time.RFC3339))
+}
 ```
 
 ### 移除任务
 
 ```go
-task := &cron.Task{ID: "task-to-remove"}
-removed := scheduler.RemoveTask(task)
+removed := scheduler.RemoveTaskByID("task-to-remove")
 if removed {
     fmt.Println("任务已移除")
 } else {
@@ -406,17 +404,17 @@ if removed {
 }
 ```
 
+推荐使用 `RemoveTaskByID` 移除任务。它也会阻止正在运行的同 ID 任务在结束后重新调度。`GetTasks()` 返回只读 `TaskInfo` 快照。
+
+
 ## 最佳实践
 
-1. **选择合适的存储后端**
-   - 简单应用使用 `StorageTypeHeap` (默认)
-   - 高并发、大量任务使用 `StorageTypeTimeWheel`
-
-2. **设置适当的超时**
+1. **设置适当的超时**
    - 始终设置超时以防止任务无限期运行
    - 考虑预期执行时间并留出缓冲
+   - 长时间运行的任务优先使用 `func(context.Context) error` 并检查 `ctx.Done()`
 
-3. **明智地使用重试**
+2. **明智地使用重试**
    - 对可能因瞬态错误失败的任务设置重试
    - 不要对必然失败的任务进行重试
 
@@ -433,8 +431,9 @@ if removed {
    - 服务器间一致性建议使用 UTC
 
 7. **优雅关闭**
-   - 退出前始终调用 `scheduler.Stop()`
-   - 这将等待正在运行的任务完成
+   - 只需要停止调度新任务时使用 `scheduler.Stop()`
+   - 需要取消支持 context 的任务并等待已跟踪任务完成时，使用 `scheduler.Shutdown(ctx)`
+   - 已超时或已取消但忽略 `context.Context` 的任务，可能会在调度器等待之外继续运行
 
 ## 示例代码
 

@@ -23,6 +23,21 @@ func TestNewCronParser_InvalidLength(t *testing.T) {
 	}
 }
 
+func TestWithLocationNilFallsBackToLocal(t *testing.T) {
+	parser, err := Parse("* * * * *", WithLocation(nil))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if parser.location != time.Local {
+		t.Fatalf("expected nil location to fall back to time.Local, got %v", parser.location)
+	}
+
+	next := parser.Next(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	if next.IsZero() {
+		t.Fatal("expected Next to work with nil location option")
+	}
+}
+
 func TestNewCronParser_ParseFields(t *testing.T) {
 	parser, err := newCronParser("*/15 1-3 1,15 * *", WithLocation(time.UTC))
 	if err != nil {

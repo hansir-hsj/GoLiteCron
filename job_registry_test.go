@@ -11,12 +11,15 @@ import (
 
 func TestRegisterJob_Single(t *testing.T) {
 	called := false
-	RegisterJob("test-single-job", func() error {
+	s := NewScheduler()
+	if err := s.RegisterJob("test-single-job", func() error {
 		called = true
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
-	fn, ok := GetJob("test-single-job")
+	fn, ok := s.GetJob("test-single-job")
 	if !ok {
 		t.Fatal("expected to find registered job")
 	}
@@ -31,12 +34,15 @@ func TestRegisterJob_Single(t *testing.T) {
 }
 
 func TestRegisterJob_Multiple(t *testing.T) {
-	RegisterJob("job-a", func() error { return nil })
-	RegisterJob("job-b", func() error { return nil })
-	RegisterJob("job-c", func() error { return nil })
+	s := NewScheduler()
+	for _, name := range []string{"job-a", "job-b", "job-c"} {
+		if err := s.RegisterJob(name, func() error { return nil }); err != nil {
+			t.Fatalf("Register %s failed: %v", name, err)
+		}
+	}
 
 	for _, name := range []string{"job-a", "job-b", "job-c"} {
-		if _, ok := GetJob(name); !ok {
+		if _, ok := s.GetJob(name); !ok {
 			t.Errorf("expected to find job %s", name)
 		}
 	}
@@ -44,18 +50,23 @@ func TestRegisterJob_Multiple(t *testing.T) {
 
 func TestRegisterJob_Override(t *testing.T) {
 	counter := int32(0)
+	s := NewScheduler()
 
-	RegisterJob("override-job", func() error {
+	if err := s.RegisterJob("override-job", func() error {
 		atomic.AddInt32(&counter, 1)
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("first Register failed: %v", err)
+	}
 
-	RegisterJob("override-job", func() error {
+	if err := s.RegisterJob("override-job", func() error {
 		atomic.AddInt32(&counter, 10)
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("second Register failed: %v", err)
+	}
 
-	fn, ok := GetJob("override-job")
+	fn, ok := s.GetJob("override-job")
 	if !ok {
 		t.Fatal("expected to find registered job")
 	}
@@ -71,9 +82,23 @@ func TestRegisterJob_Override(t *testing.T) {
 }
 
 func TestGetJob_NotFound(t *testing.T) {
-	_, ok := GetJob("non-existent-job-xyz")
+	s := NewScheduler()
+	_, ok := s.GetJob("non-existent-job-xyz")
 	if ok {
 		t.Fatal("expected not to find non-existent job")
+	}
+}
+
+func TestSchedulerJobRegistriesAreIsolated(t *testing.T) {
+	s1 := NewScheduler()
+	s2 := NewScheduler()
+
+	if err := s1.RegisterJob("isolated", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
+
+	if _, ok := s2.GetJob("isolated"); ok {
+		t.Fatal("expected scheduler registries to be isolated")
 	}
 }
 
@@ -97,10 +122,13 @@ func TestFuncJob_ID(t *testing.T) {
 func TestLoadTasksFromConfig_Success(t *testing.T) {
 	// Register job first
 	executed := int32(0)
-	RegisterJob("config-test-job", func() error {
+	s := NewScheduler()
+	if err := s.RegisterJob("config-test-job", func() error {
 		atomic.AddInt32(&executed, 1)
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	content := `tasks:
   - id: "config-task"
@@ -119,7 +147,6 @@ func TestLoadTasksFromConfig_Success(t *testing.T) {
 		t.Fatalf("LoadFromYaml failed: %v", err)
 	}
 
-	s := NewScheduler()
 	if err := s.LoadTasksFromConfig(config); err != nil {
 		t.Fatalf("LoadTasksFromConfig failed: %v", err)
 	}
@@ -144,7 +171,10 @@ func TestLoadTasksFromConfig_Success(t *testing.T) {
 }
 
 func TestLoadTasksFromConfig_MissingID(t *testing.T) {
-	RegisterJob("missing-id-job", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("missing-id-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -156,7 +186,6 @@ func TestLoadTasksFromConfig_MissingID(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err == nil {
 		t.Fatal("expected error for missing ID")
@@ -164,7 +193,10 @@ func TestLoadTasksFromConfig_MissingID(t *testing.T) {
 }
 
 func TestLoadTasksFromConfig_MissingCronExpr(t *testing.T) {
-	RegisterJob("missing-cron-job", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("missing-cron-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -176,7 +208,6 @@ func TestLoadTasksFromConfig_MissingCronExpr(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err == nil {
 		t.Fatal("expected error for missing CronExpr")
@@ -220,7 +251,10 @@ func TestLoadTasksFromConfig_JobNotFound(t *testing.T) {
 }
 
 func TestLoadTasksFromConfig_InvalidCronExpr(t *testing.T) {
-	RegisterJob("invalid-cron-job", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("invalid-cron-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -232,15 +266,49 @@ func TestLoadTasksFromConfig_InvalidCronExpr(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err == nil {
 		t.Fatal("expected error for invalid cron expression")
 	}
 }
 
+func TestLoadTasksFromConfigFailureDoesNotKeepPartialTasks(t *testing.T) {
+	s := NewScheduler()
+	if err := s.RegisterJob("valid-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob valid-job failed: %v", err)
+	}
+	if err := s.RegisterJob("invalid-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob invalid-job failed: %v", err)
+	}
+
+	config := &Config{
+		Tasks: []TaskConfig{
+			{
+				ID:       "valid-task",
+				CronExpr: "* * * * *",
+				FuncName: "valid-job",
+			},
+			{
+				ID:       "invalid-task",
+				CronExpr: "invalid cron expression",
+				FuncName: "invalid-job",
+			},
+		},
+	}
+
+	if err := s.LoadTasksFromConfig(config); err == nil {
+		t.Fatal("expected config loading to fail")
+	}
+	if tasks := s.GetTasks(); len(tasks) != 0 {
+		t.Fatalf("expected failed config load to leave no tasks, got %+v", tasks)
+	}
+}
+
 func TestLoadTasksFromConfig_InvalidLocation(t *testing.T) {
-	RegisterJob("invalid-loc-job", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("invalid-loc-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -253,7 +321,6 @@ func TestLoadTasksFromConfig_InvalidLocation(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err == nil {
 		t.Fatal("expected error for invalid location")
@@ -261,7 +328,10 @@ func TestLoadTasksFromConfig_InvalidLocation(t *testing.T) {
 }
 
 func TestLoadTasksFromConfig_WithAllOptions(t *testing.T) {
-	RegisterJob("full-options-job", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("full-options-job", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -278,7 +348,6 @@ func TestLoadTasksFromConfig_WithAllOptions(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err != nil {
 		t.Fatalf("LoadTasksFromConfig failed: %v", err)
@@ -290,17 +359,22 @@ func TestLoadTasksFromConfig_WithAllOptions(t *testing.T) {
 	}
 
 	task := tasks[0]
-	if task.CronParser.timeout != 5000*time.Millisecond {
-		t.Errorf("expected timeout 5000ms, got %v", task.CronParser.timeout)
+	if task.Timeout != 5000*time.Millisecond {
+		t.Errorf("expected timeout 5000ms, got %v", task.Timeout)
 	}
-	if task.CronParser.retry != 3 {
-		t.Errorf("expected retry 3, got %d", task.CronParser.retry)
+	if task.Retry != 3 {
+		t.Errorf("expected retry 3, got %d", task.Retry)
 	}
 }
 
 func TestLoadTasksFromConfig_MultipleTasks(t *testing.T) {
-	RegisterJob("multi-job-1", func() error { return nil })
-	RegisterJob("multi-job-2", func() error { return nil })
+	s := NewScheduler()
+	if err := s.RegisterJob("multi-job-1", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob multi-job-1 failed: %v", err)
+	}
+	if err := s.RegisterJob("multi-job-2", func() error { return nil }); err != nil {
+		t.Fatalf("RegisterJob multi-job-2 failed: %v", err)
+	}
 
 	config := &Config{
 		Tasks: []TaskConfig{
@@ -317,7 +391,6 @@ func TestLoadTasksFromConfig_MultipleTasks(t *testing.T) {
 		},
 	}
 
-	s := NewScheduler()
 	err := s.LoadTasksFromConfig(config)
 	if err != nil {
 		t.Fatalf("LoadTasksFromConfig failed: %v", err)

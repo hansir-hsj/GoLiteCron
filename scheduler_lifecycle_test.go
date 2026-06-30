@@ -1,6 +1,10 @@
 package golitecron
 
 import (
+	"context"
+	"io"
+	"log"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,25 +134,63 @@ func TestScheduler_StopWaitsForRunningTasks(t *testing.T) {
 		t.Fatal("task did not start within timeout")
 	}
 
-	// Stop should block until task finishes
-	stopDone := make(chan struct{})
+	shutdownDone := make(chan error, 1)
 	go func() {
-		s.Stop()
-		close(stopDone)
+		shutdownDone <- s.Shutdown(context.Background())
 	}()
 
-	// Stop should not return before task finishes
 	select {
-	case <-stopDone:
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown failed: %v", err)
+		}
 		// Check if task finished
 		select {
 		case <-taskFinished:
-			// Good: task finished before Stop returned
+			// Good: task finished before Shutdown returned
 		default:
-			t.Fatal("Stop returned before task finished")
+			t.Fatal("Shutdown returned before task finished")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Stop did not return within timeout")
+		t.Fatal("Shutdown did not return within timeout")
+	}
+}
+
+func TestScheduler_ShutdownCancelsRunningContextJobs(t *testing.T) {
+	s := NewScheduler()
+
+	taskStarted := make(chan struct{})
+	taskCancelled := make(chan struct{})
+
+	job, _ := WrapJob("cancel-on-shutdown", func(ctx context.Context) error {
+		close(taskStarted)
+		<-ctx.Done()
+		close(taskCancelled)
+		return ctx.Err()
+	})
+
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("task did not start within timeout")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	select {
+	case <-taskCancelled:
+	default:
+		t.Fatal("Shutdown returned before canceling the running job context")
 	}
 }
 
@@ -210,35 +252,43 @@ func TestScheduler_DuplicateTaskID(t *testing.T) {
 func TestScheduler_RemoveNonExistentTask(t *testing.T) {
 	s := NewScheduler()
 
-	task := &Task{ID: "non-existent"}
-	removed := s.RemoveTask(task)
+	task := &task{ID: "non-existent"}
+	removed := s.RemoveTaskByID(task.ID)
 
 	if removed {
 		t.Fatal("expected RemoveTask to return false for non-existent task")
 	}
 }
 
-// TestScheduler_GetTaskInfoNotFound tests GetTaskInfo for non-existent task
-func TestScheduler_GetTaskInfoNotFound(t *testing.T) {
+// TestScheduler_RemoveTaskByID tests removing a task using only its ID.
+func TestScheduler_RemoveTaskByID(t *testing.T) {
 	s := NewScheduler()
 
-	info := s.GetTaskInfo("non-existent")
-	if info == "" {
-		t.Fatal("expected non-empty info string")
+	job, _ := WrapJob("remove-by-id", func() error { return nil })
+	if err := s.AddTask("* * * * *", job, WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
 	}
-	// Should contain "not found"
-	if !contains_string(info, "not found") {
-		t.Fatalf("expected 'not found' in info, got: %s", info)
+
+	if !s.RemoveTaskByID("remove-by-id") {
+		t.Fatal("expected RemoveTaskByID to remove existing task")
+	}
+
+	if s.taskStorage.TaskExist("remove-by-id") {
+		t.Fatal("expected task to be removed from storage")
+	}
+
+	if s.RemoveTaskByID("missing-task") {
+		t.Fatal("expected RemoveTaskByID to return false for missing task")
 	}
 }
 
-// TestScheduler_WithTimeWheel tests scheduler with TimeWheel storage
-func TestScheduler_WithTimeWheel(t *testing.T) {
-	s := NewScheduler(StorageTypeTimeWheel)
+func TestScheduler_StopCanBeCalledFromRunningTask(t *testing.T) {
+	s := NewScheduler()
+	done := make(chan struct{})
 
-	runCount := int32(0)
-	job, _ := WrapJob("timewheel-test", func() error {
-		atomic.AddInt32(&runCount, 1)
+	job, _ := WrapJob("self-stop", func() error {
+		s.Stop()
+		close(done)
 		return nil
 	})
 
@@ -247,25 +297,190 @@ func TestScheduler_WithTimeWheel(t *testing.T) {
 	}
 
 	s.Start()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop called from a running task deadlocked")
+	}
+}
+
+func TestScheduler_StartWaitsForStopToFinish(t *testing.T) {
+	s := NewScheduler()
+	oldStopChan := make(chan struct{})
+	oldRunDone := make(chan struct{})
+	s.stopChan = oldStopChan
+	s.runDone = oldRunDone
+	atomic.StoreInt32(&s.running, 1)
+
+	stopStarted := make(chan struct{})
+	stopBlocked := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		close(stopStarted)
+		s.Stop()
+	}()
+
+	<-stopStarted
+	<-oldStopChan
+	time.AfterFunc(50*time.Millisecond, func() {
+		close(stopBlocked)
+	})
+	<-stopBlocked
+
+	startReturned := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.Start()
+		close(startReturned)
+	}()
+
+	select {
+	case <-startReturned:
+		t.Fatal("Start returned before the previous Stop completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(oldRunDone)
+	wg.Wait()
+
+	select {
+	case <-startReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not return after the previous Stop completed")
+	}
+
+	s.Stop()
+}
+
+func TestScheduler_WithLoggerRejectsRunningScheduler(t *testing.T) {
+	s := NewScheduler()
+	job, _ := WrapJob("logger-running", func() error { return nil })
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+	defer s.Stop()
+
+	if err := s.WithLogger(&stdLogger{Logger: log.New(io.Discard, "", 0)}); err == nil {
+		t.Fatal("expected WithLogger to reject changes while scheduler is running")
+	}
+}
+
+func TestScheduler_AddTaskDoesNotHoldTaskLockWhileParsing(t *testing.T) {
+	s := NewScheduler()
+	job, _ := WrapJob("lock-scope", func() error { return nil })
+
+	option := testTaskOption(func(*taskSettings) {
+		s.RemoveTaskByID("missing")
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.AddTask("* * * * *", job, option)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AddTask failed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("AddTask held task lock while parsing cron options")
+	}
+}
+
+type testTaskOption func(*taskSettings)
+
+func (opt testTaskOption) applyTaskOption(settings *taskSettings) {
+	opt(settings)
+}
+
+// TestScheduler_RemoveTaskByIDDuringExecutionDoesNotReschedule verifies ID-based
+// removal marks the running task so it cannot requeue itself after finishing.
+func TestScheduler_RemoveTaskByIDDuringExecutionDoesNotReschedule(t *testing.T) {
+	s := NewScheduler()
+
+	executionCount := int32(0)
+	taskStarted := make(chan struct{}, 1)
+	releaseTask := make(chan struct{})
+
+	job, _ := WrapJob("remove-by-id-running", func() error {
+		count := atomic.AddInt32(&executionCount, 1)
+		if count == 1 {
+			taskStarted <- struct{}{}
+			<-releaseTask
+		}
+		return nil
+	})
+
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start within timeout")
+	}
+
+	if !s.RemoveTaskByID("remove-by-id-running") {
+		t.Fatal("expected RemoveTaskByID to mark running task as removed")
+	}
+
+	close(releaseTask)
 	time.Sleep(1500 * time.Millisecond)
 	s.Stop()
 
-	count := atomic.LoadInt32(&runCount)
-	if count == 0 {
-		t.Fatal("expected at least one execution with TimeWheel storage")
+	if count := atomic.LoadInt32(&executionCount); count != 1 {
+		t.Fatalf("expected task to execute once after ID-based removal, got %d", count)
 	}
 }
 
-// helper function
-func contains_string(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains_substring(s, substr))
+func TestScheduler_AddTaskRejectsRunningTaskID(t *testing.T) {
+	s := NewScheduler()
+
+	taskStarted := make(chan struct{}, 1)
+	releaseTask := make(chan struct{})
+
+	job, _ := WrapJob("running-duplicate", func() error {
+		taskStarted <- struct{}{}
+		<-releaseTask
+		return nil
+	})
+
+	if err := s.AddTask("*/1 * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+	defer s.Stop()
+
+	select {
+	case <-taskStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start within timeout")
+	}
+
+	duplicateJob, _ := WrapJob("running-duplicate", func() error { return nil })
+	if err := s.AddTask("*/1 * * * * *", duplicateJob, WithSeconds(), WithLocation(time.UTC)); err == nil {
+		close(releaseTask)
+		t.Fatal("expected AddTask to reject ID that is currently running")
+	}
+
+	close(releaseTask)
 }
 
-func contains_substring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestScheduler_GetTaskNotFound(t *testing.T) {
+	s := NewScheduler()
+
+	if _, ok := s.GetTask("non-existent"); ok {
+		t.Fatal("expected GetTask to return false for a non-existent task")
 	}
-	return false
 }

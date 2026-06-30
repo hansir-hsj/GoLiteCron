@@ -32,17 +32,7 @@ Tests the cron expression parsing and `Next()` calculation performance.
 | `BenchmarkNext_Sequential_*` | Sequential Next() calls (simulates real scheduling) |
 | `BenchmarkNext_Parallel` | Thread-safe concurrent Next() calls |
 
-### 2. Storage Benchmarks (`storage_bench_test.go`)
-
-Compares Heap vs TimeWheel storage backends.
-
-| Benchmark | Description |
-|-----------|-------------|
-| `BenchmarkHeap_*` | Heap-based priority queue operations |
-| `BenchmarkTimeWheel_*` | Multi-level time wheel operations |
-| `BenchmarkComparison_*` | Direct Heap vs TimeWheel comparison |
-
-### 3. Comparison Benchmarks (`comparison_bench_test.go`)
+### 2. Comparison Benchmarks (`comparison_bench_test.go`)
 
 Head-to-head comparison with `robfig/cron`.
 
@@ -53,7 +43,7 @@ Head-to-head comparison with `robfig/cron`.
 | `BenchmarkComparison_AddTasks*` | Bulk task addition comparison |
 | `BenchmarkComparison_StartStop_*` | Scheduler lifecycle comparison |
 
-### 4. Memory Benchmarks (`memory_bench_test.go`)
+### 3. Memory Benchmarks (`memory_bench_test.go`)
 
 Memory allocation and leak detection tests.
 
