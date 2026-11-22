@@ -22,7 +22,7 @@ type TaskInfo struct {
     NextRunTime time.Time
     PreRunTime  time.Time
     Running     bool
-    Removed     bool
+    Removed     bool // Deprecated
     Location    *time.Location
     Timeout     time.Duration
     Retry       int
@@ -93,7 +93,8 @@ func WrapJob(id string, fn any) (Job, error)
 
 ### RegisterJob / GetJob
 
-Manages scheduler-local job functions for configuration loading.
+Manages scheduler-local jobs for configuration loading. `fn` may be a `Job`,
+`func() error`, or `func(context.Context) error`.
 
 ```go
 func (s *Scheduler) RegisterJob(name string, fn any) error
@@ -121,7 +122,7 @@ func (s *Scheduler) Start()
 
 ### Stop
 
-Stops the scheduler loop and waits for it to exit. It prevents new executions from being scheduled, but does not wait for already running tasks.
+Stops the scheduler loop and waits for it to exit. It prevents new executions from being scheduled, but does not wait for already running tasks. Running tasks retain their next schedule after they finish; use `RemoveTaskByID` for permanent removal.
 
 ```go
 func (s *Scheduler) Stop()
@@ -129,7 +130,7 @@ func (s *Scheduler) Stop()
 
 ### Shutdown
 
-Stops the scheduler, cancels contexts passed to running context-aware jobs, and waits for tracked goroutines to finish or until the context is canceled.
+Stops the scheduler, cancels contexts passed to running context-aware jobs, and waits for tasks started before the call to finish or until the context is canceled. Tasks keep their schedules, and `Start` may be called again without waiting for the drain. Calling it from a Job with that Job's context returns `ErrShutdownFromJob`. If tasks are running and `ctx` has no deadline, it stops the scheduler without waiting and returns `ErrShutdownDeadlineRequired`.
 
 ```go
 func (s *Scheduler) Shutdown(ctx context.Context) error
@@ -155,7 +156,7 @@ func (s *Scheduler) RemoveTaskByID(taskID string) bool
 
 ### GetTasks
 
-Returns read-only snapshots of all currently scheduled tasks. Mutating returned values never changes scheduler state.
+Returns read-only snapshots of all currently scheduled tasks, including running tasks. Mutating returned values never changes scheduler state.
 
 ```go
 func (s *Scheduler) GetTasks() []TaskInfo
@@ -193,6 +194,16 @@ Sets a custom logger for the scheduler. Must be called before `Start()`.
 func (s *Scheduler) WithLogger(l Logger) error
 ```
 
+Returns an error for a nil logger or when called while the scheduler is running.
+
+### WithTickDuration
+
+Sets how often the scheduler checks for due tasks. The default is 500 ms. Call it while the scheduler is stopped.
+
+```go
+func (s *Scheduler) WithTickDuration(duration time.Duration) error
+```
+
 ## Options
 
 Configuration options for `AddTask`. `WithTimeout` and `WithRetry` are task-only options and cannot be passed to `Parse`.
@@ -200,5 +211,16 @@ Configuration options for `AddTask`. `WithTimeout` and `WithRetry` are task-only
 - `WithSeconds()`: Enables second-level precision (6 fields).
 - `WithYears()`: Enables year field (7 fields).
 - `WithLocation(loc *time.Location)`: Sets timezone.
-- `WithTimeout(timeout time.Duration)`: Sets how long the scheduler waits for one execution. Jobs that accept `context.Context` should stop when the context is done; jobs that ignore it may continue running until they return.
-- `WithRetry(retry int)`: Sets retry count on failure.
+- `WithTimeout(timeout time.Duration)`: Sets how long the scheduler waits before reporting a timeout. Jobs that accept `context.Context` should stop when the context is done. A job that ignores it remains tracked and is not scheduled again until it returns. Timeouts are not retried.
+- `WithRetry(retry int)`: Sets the number of immediate retries on failure; retries have no backoff.
+
+## Behavior Changes
+
+These changes can break existing callers when upgrading:
+
+- `Shutdown` with no `ctx` deadline returns `ErrShutdownDeadlineRequired` after stopping if tasks are running. Pass a context with a timeout to wait.
+- `WithLogger(nil)` returns an error instead of being ignored.
+- `At()` combined with `Second`, `Minute`, or `Hour` units, and `Every(n)` with `n > 1` on weekday units, make `Do` return an error instead of silently ignoring the setting.
+- A number before `L` in day of month (for example `5L`) is rejected; use a bare `L`.
+- Day of week accepts `7` as Sunday, and month and weekday names such as `JAN` and `MON`.
+- A panicking custom logger no longer stops scheduling; the message is written to stderr instead.

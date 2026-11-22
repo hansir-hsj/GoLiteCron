@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,6 +21,81 @@ func TestNewCronParser_InvalidLength(t *testing.T) {
 	_, err := newCronParser("0 0 0 * * *")
 	if err == nil {
 		t.Fatalf("expected error for invalid cron expression length, got nil")
+	}
+}
+
+func TestCronParserUnknownMacro(t *testing.T) {
+	if _, err := Parse("@sometimes"); err == nil || !strings.Contains(err.Error(), "unknown cron macro") {
+		t.Fatalf("expected unknown macro error, got %v", err)
+	}
+}
+
+func TestCronParserFieldNamesAndSundaySeven(t *testing.T) {
+	parser, err := Parse("0 9 * JAN,MAR MON-FRI", WithLocation(time.UTC))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(parser.months) != 2 || !mapHas(parser.months, 1, 3) ||
+		len(parser.dayOfWeek) != 5 || !mapHas(parser.dayOfWeek, 1, 2, 3, 4, 5) {
+		t.Fatalf("unexpected named fields: months=%v weekdays=%v", parser.months, parser.dayOfWeek)
+	}
+	weekend, err := Parse("0 9 * * FRI-SUN", WithLocation(time.UTC))
+	if err != nil {
+		t.Fatalf("FRI-SUN should parse like 5-7: %v", err)
+	}
+	if len(weekend.dayOfWeek) != 3 || !mapHas(weekend.dayOfWeek, 5, 6, 0) {
+		t.Fatalf("FRI-SUN weekdays = %v, want 5,6,0", weekend.dayOfWeek)
+	}
+
+	sunday, err := Parse("0 0 * * 7", WithLocation(time.UTC))
+	if err != nil {
+		t.Fatalf("Sunday=7 should parse: %v", err)
+	}
+	if !mapHas(sunday.dayOfWeek, 0) {
+		t.Fatalf("Sunday=7 was not normalized: %v", sunday.dayOfWeek)
+	}
+	if _, err := Parse("0 0 * * MON-FOO"); err == nil || !strings.Contains(err.Error(), "MON-FOO") {
+		t.Fatalf("expected error to quote the original field, got %v", err)
+	}
+	for _, expr := range []string{"0 0 * JANJAN *", "0 0 * JAN1 *", "0 0 * * SUN1"} {
+		if _, err := Parse(expr); err == nil {
+			t.Errorf("Parse(%q) should reject names glued to other text", expr)
+		}
+	}
+}
+
+func TestCronParserWeekdayStepsExcludeSundayAlias(t *testing.T) {
+	tests := []struct {
+		expr string
+		want []int
+	}{
+		{"0 0 * * 1/2", []int{1, 3, 5}},
+		{"0 0 * * 1/3", []int{1, 4}},
+		{"0 0 * * */2", []int{0, 2, 4, 6}},
+		{"0 0 * * 5-7/2", []int{5, 0}},
+	}
+	for _, tt := range tests {
+		parser, err := Parse(tt.expr, WithLocation(time.UTC))
+		if err != nil {
+			t.Fatalf("Parse(%q) failed: %v", tt.expr, err)
+		}
+		if len(parser.dayOfWeek) != len(tt.want) || !mapHas(parser.dayOfWeek, tt.want...) {
+			t.Errorf("Parse(%q) weekdays = %v, want %v", tt.expr, parser.dayOfWeek, tt.want)
+		}
+	}
+}
+
+func TestCronParserLastSundayAliases(t *testing.T) {
+	for _, expr := range []string{"0 0 * * 7L", "0 0 * * SUNL", "0 0 * * 0L"} {
+		parser, err := Parse(expr, WithLocation(time.UTC))
+		if err != nil {
+			t.Fatalf("Parse(%q) failed: %v", expr, err)
+		}
+		next := parser.Next(time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC))
+		want := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+		if !next.Equal(want) {
+			t.Errorf("Parse(%q).Next() = %v, want %v", expr, next, want)
+		}
 	}
 }
 
@@ -125,6 +201,22 @@ func TestL_LastDayOfMonth_Next(t *testing.T) {
 	}
 }
 
+func TestLNumericInDayOfMonthRejected(t *testing.T) {
+	// "5L" in day-of-month is not supported; reject instead of misparsing
+	_, err := newCronParser("0 0 5L * *", WithLocation(time.UTC))
+	if err == nil {
+		t.Fatal("expected error for numeric 'L' in day-of-month field")
+	}
+
+	// plain L and day-of-week nL keep working
+	if _, err := newCronParser("0 0 L * *", WithLocation(time.UTC)); err != nil {
+		t.Fatalf("plain L should still parse: %v", err)
+	}
+	if _, err := newCronParser("0 0 * * 5L", WithLocation(time.UTC)); err != nil {
+		t.Fatalf("day-of-week nL should still parse: %v", err)
+	}
+}
+
 func TestL_LastWeekDayOfMonth_Next(t *testing.T) {
 	parser, err := newCronParser("0 0 * * 5L", WithLocation(time.UTC))
 	if err != nil {
@@ -154,9 +246,7 @@ func TestW_NearstWeekDay_Next(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Step Expression Tests (*/n, start-end/n, start/n)
-// ============================================================================
 
 func TestStep_AnyStep(t *testing.T) {
 	// Test */7 which was previously rejected because 60%7 != 0

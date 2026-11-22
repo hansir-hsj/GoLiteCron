@@ -1,31 +1,21 @@
 package golitecron
 
 type taskLifecycle struct {
-	removed map[string]struct{}
-	running map[string]struct{}
+	running map[string]*task
 }
 
 func newTaskLifecycle() *taskLifecycle {
 	return &taskLifecycle{
-		removed: make(map[string]struct{}),
-		running: make(map[string]struct{}),
+		running: make(map[string]*task),
 	}
 }
 
-func (tl *taskLifecycle) markRunning(taskID string) {
-	tl.running[taskID] = struct{}{}
+func (tl *taskLifecycle) markRunning(task *task) {
+	tl.running[task.ID] = task
 }
 
 func (tl *taskLifecycle) unmarkRunning(taskID string) {
 	delete(tl.running, taskID)
-}
-
-func (tl *taskLifecycle) markRemoved(taskID string) {
-	tl.removed[taskID] = struct{}{}
-}
-
-func (tl *taskLifecycle) clearRemoved(taskID string) {
-	delete(tl.removed, taskID)
 }
 
 func (tl *taskLifecycle) isRunning(taskID string) bool {
@@ -33,7 +23,7 @@ func (tl *taskLifecycle) isRunning(taskID string) bool {
 	return ok
 }
 
-func (tl *taskLifecycle) isRemoved(taskID string) bool {
-	_, ok := tl.removed[taskID]
-	return ok
+func (tl *taskLifecycle) getRunning(taskID string) (*task, bool) {
+	task, ok := tl.running[taskID]
+	return task, ok
 }

@@ -115,11 +115,8 @@ scheduler.Every().Sunday().At("08:00").Do(job)
 ### Weekly and Monthly
 
 ```go
-// Every week (Sunday midnight)
+// Every week (Sunday midnight); intervals greater than one are not supported
 scheduler.Every().Week().Do(job)
-
-// Every 2 weeks
-scheduler.Every(2).Weeks().Do(job)
 
 // Every month (1st day midnight)
 scheduler.Every().Month().Do(job)
@@ -177,7 +174,7 @@ if err != nil {
 ```
 * * * * *
 │ │ │ │ │
-│ │ │ │ └── Day of week (0-6, Sunday=0)
+│ │ │ │ └── Day of week (0-7, Sunday=0 or 7)
 │ │ │ └──── Month (1-12)
 │ │ └────── Day of month (1-31)
 │ └──────── Hour (0-23)
@@ -188,7 +185,7 @@ if err != nil {
 ```
 * * * * * *
 │ │ │ │ │ │
-│ │ │ │ │ └── Day of week (0-6)
+│ │ │ │ │ └── Day of week (0-7)
 │ │ │ │ └──── Month (1-12)
 │ │ │ └────── Day of month (1-31)
 │ │ └──────── Hour (0-23)
@@ -201,7 +198,7 @@ if err != nil {
 * * * * * * *
 │ │ │ │ │ │ │
 │ │ │ │ │ │ └── Year (1970-2099)
-│ │ │ │ │ └──── Day of week (0-6)
+│ │ │ │ │ └──── Day of week (0-7)
 │ │ │ │ └────── Month (1-12)
 │ │ │ └──────── Day of month (1-31)
 │ │ └────────── Hour (0-23)
@@ -217,8 +214,10 @@ if err != nil {
 | `,` | List of values | `1,15,30 * * * *` - at minute 1, 15, 30 |
 | `-` | Range | `1-5 * * * *` - minutes 1 through 5 |
 | `/` | Step values | `*/15 * * * *` - every 15 minutes |
-| `L` | Last | `0 0 L * *` - last day of month |
+| `L` | Last | `0 0 L * *` - last day of month; `5L` in day of week - last Friday. Day of month accepts only a bare `L` |
 | `W` | Nearest weekday | `0 0 15W * *` - nearest weekday to 15th |
+
+On a daylight-saving fall-back day, the repeated hour is not run twice: after a run in its first pass, the next run is the first match after the repeated hour. On a spring-forward day, times inside the skipped hour do not run that day.
 
 ### Examples
 
@@ -314,7 +313,7 @@ scheduler.AddTask("*/30 * * * * *", job, cron.WithSeconds())
 Enables 7-field cron expressions with year specification.
 
 ```go
-scheduler.AddTask("0 0 1 1 * 2025", job, cron.WithSeconds(), cron.WithYears())
+scheduler.AddTask("0 0 0 1 1 * 2025", job, cron.WithSeconds(), cron.WithYears())
 ```
 
 ### Combining Options
@@ -386,6 +385,8 @@ import (
 )
 
 func main() {
+    scheduler := cron.NewScheduler()
+
     // Register job functions first
     scheduler.RegisterJob("backupDatabase", func() error {
         fmt.Println("Backing up database...")
@@ -409,8 +410,7 @@ func main() {
         log.Fatalf("Failed to load config: %v", err)
     }
 
-    // Create scheduler and load tasks
-    scheduler := cron.NewScheduler()
+    // Load tasks into the scheduler
     if err := scheduler.LoadTasksFromConfig(config); err != nil {
         log.Fatalf("Failed to load tasks: %v", err)
     }
@@ -455,7 +455,7 @@ if removed {
 ```
 
 `RemoveTaskByID` is the recommended removal method. It also prevents a task
-that is already running from being rescheduled after it finishes. `GetTasks()` returns read-only `TaskInfo` snapshots; remove tasks by ID.
+that is already running from being rescheduled after it finishes. `GetTasks()` returns read-only `TaskInfo` snapshots, including running tasks; remove tasks by ID.
 
 ### Starting and Stopping
 
@@ -466,8 +466,10 @@ scheduler.Start()
 // Stop scheduling new work
 scheduler.Stop()
 
-// Or wait for running tasks
-_ = scheduler.Shutdown(context.Background())
+// Or wait for running tasks; a deadline is required while tasks are running
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+_ = scheduler.Shutdown(ctx)
 ```
 
 ## Best Practices
@@ -494,9 +496,9 @@ _ = scheduler.Shutdown(context.Background())
    - Use UTC for consistency across servers
 
 7. **Graceful shutdown**
-   - Use `scheduler.Stop()` to stop scheduling new work without waiting for running tasks
-   - Use `scheduler.Shutdown(ctx)` when you need to cancel context-aware jobs and wait for tracked tasks
-   - A timed-out or shutdown-canceled job that ignores `context.Context` may continue outside the scheduler's wait
+   - Use `scheduler.Stop()` to stop scheduling new work without waiting for running tasks. A running task keeps its next schedule after it returns.
+   - Use `scheduler.Shutdown(ctx)` when you need to cancel context-aware jobs and wait for tracked tasks. Call it from a controller goroutine, not from a job running on the same scheduler.
+   - A timed-out job that ignores `context.Context` remains tracked and will not overlap with its next execution
 
 ## Examples
 

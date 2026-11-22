@@ -9,11 +9,7 @@ import (
 	robfigcron "github.com/robfig/cron/v3"
 )
 
-// ============================================================================
-// Memory Profiling Benchmarks
-// These benchmarks focus on memory allocation patterns and help identify
-// memory leaks or excessive allocations
-// ============================================================================
+// Memory allocation benchmarks.
 
 // getMemStats returns current memory statistics
 func getMemStats() runtime.MemStats {
@@ -23,9 +19,7 @@ func getMemStats() runtime.MemStats {
 	return m
 }
 
-// ============================================================================
 // CronParser Memory Analysis
-// ============================================================================
 
 func BenchmarkMemory_Parse_GoLiteCron(b *testing.B) {
 	expr := "*/15 9-17 * * 1-5"
@@ -48,9 +42,7 @@ func BenchmarkMemory_Parse_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Storage Backend Memory Analysis
-// ============================================================================
 
 func BenchmarkMemory_Heap_1000Tasks(b *testing.B) {
 	b.ReportAllocs()
@@ -76,9 +68,7 @@ func BenchmarkMemory_Heap_10000Tasks(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Scheduler Memory Analysis
-// ============================================================================
 
 func BenchmarkMemory_Scheduler_Heap_100Tasks(b *testing.B) {
 	b.ReportAllocs()
@@ -104,9 +94,7 @@ func BenchmarkMemory_Scheduler_Heap_1000Tasks(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Comparison with robfig/cron Memory
-// ============================================================================
 
 func BenchmarkMemory_Comparison_100Tasks_GoLiteCron(b *testing.B) {
 	b.ReportAllocs()
@@ -154,9 +142,7 @@ func BenchmarkMemory_Comparison_1000Tasks_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Memory Leak Detection Tests (not benchmarks, but important for memory analysis)
-// ============================================================================
 
 func TestMemory_LeakDetection_AddRemove(t *testing.T) {
 	// Test that memory is properly released after removing tasks
@@ -217,11 +203,7 @@ func TestMemory_LeakDetection_Tick(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// Memory Profile Helper Tests
-// Run with: go test -bench=. -memprofile=mem.out ./benchmark/
-// Then analyze with: go tool pprof mem.out
-// ============================================================================
+// Profile with: go test -bench=. -memprofile=mem.out ./benchmark/, then go tool pprof mem.out.
 
 func BenchmarkMemoryProfile_FullWorkflow(b *testing.B) {
 	b.ReportAllocs()
@@ -256,9 +238,7 @@ func BenchmarkMemoryProfile_FullWorkflow(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Per-Task Memory Overhead Analysis
-// ============================================================================
 
 func BenchmarkMemoryOverhead_PerTask_Heap(b *testing.B) {
 	taskCounts := []int{100, 500, 1000, 5000}

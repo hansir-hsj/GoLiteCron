@@ -33,9 +33,7 @@ func createParser(b *testing.B, expr string, opts ...golitecron.ParseOption) *go
 	return parser
 }
 
-// ============================================================================
 // Cron Expression Parsing Benchmarks (via AddTask)
-// ============================================================================
 
 func BenchmarkParse_Simple(b *testing.B) {
 	expr := benchExpressions["Simple"]
@@ -93,9 +91,7 @@ func BenchmarkParse_WithLocation(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // CronParser.Next() Benchmarks - Core Scheduling Algorithm
-// ============================================================================
 
 func BenchmarkNext_Simple(b *testing.B) {
 	parser := createParser(b, benchExpressions["Simple"])
@@ -157,9 +153,7 @@ func BenchmarkNext_WithSeconds_Complex(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // CronParser.Next() Sequential Calls - Simulates Real Scheduling
-// ============================================================================
 
 func BenchmarkNext_Sequential_100(b *testing.B) {
 	parser := createParser(b, benchExpressions["Simple"])
@@ -185,9 +179,7 @@ func BenchmarkNext_Sequential_1000(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Parallel Benchmarks - Thread Safety
-// ============================================================================
 
 func BenchmarkNext_Parallel(b *testing.B) {
 	parser := createParser(b, benchExpressions["Medium"])
@@ -214,9 +206,7 @@ func BenchmarkParse_Parallel(b *testing.B) {
 	})
 }
 
-// ============================================================================
 // Edge Cases
-// ============================================================================
 
 func BenchmarkNext_EndOfMonth(b *testing.B) {
 	parser := createParser(b, "0 0 28-31 * *") // Last days of month

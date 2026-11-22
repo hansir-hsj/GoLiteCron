@@ -191,6 +191,8 @@ func newCronParserFromSettings(expr string, settings taskSettings) (*CronParser,
 			expr = Hourly
 		case "@minutely":
 			expr = Minutely
+		default:
+			return nil, fmt.Errorf("unknown cron macro: %s", expr)
 		}
 	}
 
@@ -215,14 +217,18 @@ func newCronParserFromSettings(expr string, settings taskSettings) (*CronParser,
 	}
 
 	parsed := make(map[fieldType]map[int]struct{}, len(parts))
-	for i, part := range parts {
+	for i, rawPart := range parts {
 		rule := rules[i]
+		part := normalizeFieldNames(rawPart, rule.field)
 		vals, err := rule.parseFunc(part, rule.min, rule.max, rule.field)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing field %d (%s): %v", i, part, err)
+			return nil, fmt.Errorf("error parsing field %d (%s): %w", i, rawPart, err)
 		}
 		if len(vals) == 0 {
-			return nil, fmt.Errorf("invalid field %d (%s)", i, part)
+			return nil, fmt.Errorf("invalid field %d (%s)", i, rawPart)
+		}
+		if rule.field == dayOfWeekField {
+			vals = normalizeDayOfWeek(vals)
 		}
 		parsed[rule.field] = vals
 
@@ -269,8 +275,64 @@ var defaultRules = []parseRule{
 	{hoursField, 0, 23, parseField},
 	{dayOfMonthField, 1, 31, parseField},
 	{monthsField, 1, 12, parseField},
-	{dayOfWeekField, 0, 6, parseField},
+	{dayOfWeekField, 0, 7, parseField},
 	{yearsField, 1970, 2099, parseField},
+}
+
+func normalizeFieldNames(field string, fieldType fieldType) string {
+	field = strings.ToUpper(field)
+	var names []string
+	switch fieldType {
+	case monthsField:
+		names = []string{"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"}
+	case dayOfWeekField:
+		names = []string{"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"}
+	default:
+		return field
+	}
+	// Replace whole tokens only (an L suffix is kept), so "JANJAN" stays invalid.
+	var b strings.Builder
+	start := 0
+	rangeEnd := false
+	flush := func(end int) {
+		token := field[start:end]
+		name, suffix := token, ""
+		if len(token) > 1 && strings.HasSuffix(token, "L") {
+			name, suffix = token[:len(token)-1], "L"
+		}
+		for value, candidate := range names {
+			if name == candidate {
+				if fieldType == monthsField {
+					value++
+				}
+				// SUN closing a range means 7, so FRI-SUN works like 5-7.
+				if fieldType == dayOfWeekField && value == 0 && rangeEnd && suffix == "" {
+					value = 7
+				}
+				token = strconv.Itoa(value) + suffix
+				break
+			}
+		}
+		_, _ = b.WriteString(token)
+	}
+	for i, r := range field {
+		if r == ',' || r == '-' || r == '/' || r == '#' {
+			flush(i)
+			_, _ = b.WriteRune(r)
+			start = i + 1
+			rangeEnd = r == '-'
+		}
+	}
+	flush(len(field))
+	return b.String()
+}
+
+func normalizeDayOfWeek(values map[int]struct{}) map[int]struct{} {
+	if _, ok := values[7]; ok {
+		delete(values, 7)
+		values[0] = struct{}{}
+	}
+	return values
 }
 
 func parseField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
@@ -284,7 +346,7 @@ func parseField(field string, min, max int, fieldType fieldType) (map[int]struct
 
 	// Check "/" before "-" because "10-30/5" contains both but should be handled as step
 	if strings.Contains(field, "/") {
-		return parseStepField(field, min, max)
+		return parseStepField(field, min, max, fieldType)
 	}
 
 	// Pure range without step (e.g., "10-30")
@@ -331,7 +393,7 @@ func parseListField(field string, min, max int, fieldType fieldType) (map[int]st
 	return result, nil
 }
 
-func parseStepField(field string, min, max int) (map[int]struct{}, error) {
+func parseStepField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {
 	parts := strings.Split(field, "/")
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid step format: %s", field)
@@ -345,6 +407,10 @@ func parseStepField(field string, min, max int) (map[int]struct{}, error) {
 	start, end, err := stepRange(parts[0], field, min, max)
 	if err != nil {
 		return nil, err
+	}
+	// 7 is only a Sunday alias, so open-ended weekday steps stop at Saturday.
+	if fieldType == dayOfWeekField && !strings.Contains(parts[0], "-") && start < end && end == 7 {
+		end = 6
 	}
 
 	result := make(map[int]struct{})
@@ -421,8 +487,15 @@ func parseLastField(field string, min, max int, fieldType fieldType) (map[int]st
 			return nil, fmt.Errorf("invalid 'L' number: %s", numStr)
 		}
 		if fieldType == dayOfWeekField {
+			if num == 7 {
+				num = 0
+			}
+			if num == 0 {
+				return map[int]struct{}{-7: {}}, nil
+			}
 			return map[int]struct{}{-num: {}}, nil
 		}
+		return nil, fmt.Errorf("numeric 'L' is only supported in day-of-week field: %s", field)
 	}
 	if fieldType == dayOfMonthField {
 		return map[int]struct{}{0: {}}, nil
@@ -465,290 +538,4 @@ func sortedKeys(m map[int]struct{}) []int {
 	}
 	sort.Ints(keys)
 	return keys
-}
-
-// Next returns the next time after t that matches the cron expression.
-// Uses field-jumping: O(F × V) where F=fields, V=max values per field.
-func (p *CronParser) Next(t time.Time) time.Time {
-	t = t.In(p.location)
-	if p.enableSeconds {
-		t = t.Add(time.Second).Truncate(time.Second)
-	} else {
-		t = t.Add(time.Minute).Truncate(time.Minute)
-	}
-
-	year := t.Year()
-	month := int(t.Month())
-	day := t.Day()
-	hour := t.Hour()
-	minute := t.Minute()
-	second := t.Second()
-
-	maxYear := year + 400
-	if p.enableYears && len(p.sortedYears) > 0 {
-		maxYear = p.sortedYears[len(p.sortedYears)-1]
-	}
-
-	for year <= maxYear {
-		// Year
-		if p.enableYears {
-			y, found := nextInSorted(p.sortedYears, year)
-			if !found || y > maxYear {
-				return time.Time{}
-			}
-			if y != year {
-				year = y
-				month = p.sortedMonths[0]
-				day = 1
-				hour = p.sortedHours[0]
-				minute = p.sortedMinutes[0]
-				second = p.firstSecond()
-			}
-		}
-
-		// Month
-		m, found := nextInSorted(p.sortedMonths, month)
-		if !found {
-			year++
-			month = p.sortedMonths[0]
-			day = 1
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-			continue
-		}
-		if m != month {
-			month = m
-			day = 1
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-		}
-
-		// Day (handles L/W and OR logic)
-		lastDay := daysInMonth(year, time.Month(month))
-		if day > lastDay {
-			month++
-			if month > 12 {
-				month = 1
-				year++
-			}
-			day = 1
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-			continue
-		}
-		d, dayFound := p.nextValidDay(year, time.Month(month), day)
-		if !dayFound {
-			month++
-			if month > 12 {
-				month = 1
-				year++
-			}
-			day = 1
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-			continue
-		}
-		if d != day {
-			day = d
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-		}
-
-		// Hour
-		h, found := nextInSorted(p.sortedHours, hour)
-		if !found {
-			day++
-			hour = p.sortedHours[0]
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-			continue
-		}
-		if h != hour {
-			hour = h
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-		}
-
-		// Minute
-		mi, found := nextInSorted(p.sortedMinutes, minute)
-		if !found {
-			hour++
-			minute = p.sortedMinutes[0]
-			second = p.firstSecond()
-			continue
-		}
-		if mi != minute {
-			minute = mi
-			second = p.firstSecond()
-		}
-
-		// Second
-		if p.enableSeconds {
-			s, found := nextInSorted(p.sortedSeconds, second)
-			if !found {
-				minute++
-				second = p.sortedSeconds[0]
-				continue
-			}
-			second = s
-		}
-
-		// Validate date (e.g., Feb 30 overflows to March)
-		result := time.Date(year, time.Month(month), day, hour, minute, second, 0, p.location)
-		if result.Year() == year && result.Month() == time.Month(month) && result.Day() == day {
-			return result
-		}
-		// Date overflow: advance to next month
-		month++
-		if month > 12 {
-			month = 1
-			year++
-		}
-		day = 1
-		hour = p.sortedHours[0]
-		minute = p.sortedMinutes[0]
-		second = p.firstSecond()
-	}
-
-	return time.Time{}
-}
-
-// nextInSorted finds the smallest value >= val in a sorted slice.
-func nextInSorted(sorted []int, val int) (int, bool) {
-	idx := sort.SearchInts(sorted, val)
-	if idx < len(sorted) {
-		return sorted[idx], true
-	}
-	return 0, false
-}
-
-// firstSecond returns the first valid second, or 0 if seconds not enabled.
-func (p *CronParser) firstSecond() int {
-	if p.enableSeconds && len(p.sortedSeconds) > 0 {
-		return p.sortedSeconds[0]
-	}
-	return 0
-}
-
-// daysInMonth returns the number of days in the given month/year.
-func daysInMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
-}
-
-// nextValidDay finds the next valid day >= startDay in the given year/month.
-func (p *CronParser) nextValidDay(year int, month time.Month, startDay int) (int, bool) {
-	lastDay := daysInMonth(year, month)
-	for day := startDay; day <= lastDay; day++ {
-		if p.isDayValid(year, month, day) {
-			return day, true
-		}
-	}
-	return 0, false
-}
-
-// isDayValid checks dayOfMonth/dayOfWeek constraints with OR logic.
-func (p *CronParser) isDayValid(year int, month time.Month, day int) bool {
-	if p.dayOfMonthWildcard && p.dayOfWeekWildcard {
-		return true
-	}
-
-	domValid := p.isDayOfMonthMatch(year, month, day)
-	dowValid := p.isDayOfWeekMatch(year, month, day)
-
-	if p.dayOfMonthWildcard {
-		return dowValid
-	}
-	if p.dayOfWeekWildcard {
-		return domValid
-	}
-	// Both specified: OR logic (standard cron behavior)
-	return domValid || dowValid
-}
-
-// isDayOfMonthMatch handles L (last day) and W (nearest weekday).
-func (p *CronParser) isDayOfMonthMatch(year int, month time.Month, day int) bool {
-	for d := range p.dayOfMonth {
-		switch {
-		case d == 0: // L: last day of month
-			if day == daysInMonth(year, month) {
-				return true
-			}
-		case d < 0: // W: nearest weekday to day -d
-			if day == findNearestWeekday(year, month, -d, p.location) {
-				return true
-			}
-		default:
-			if day == d {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isDayOfWeekMatch handles nL (last nth weekday of month).
-func (p *CronParser) isDayOfWeekMatch(year int, month time.Month, day int) bool {
-	weekday := int(time.Date(year, month, day, 0, 0, 0, 0, p.location).Weekday())
-	for w := range p.dayOfWeek {
-		if w < 0 {
-			targetWeekday := -w
-			lastDay := findLastWeekdayOfMonth(year, month, targetWeekday, p.location)
-			if day == lastDay {
-				return true
-			}
-		} else if weekday == w {
-			return true
-		}
-	}
-	return false
-}
-
-// findNearestWeekday returns the nearest weekday (Mon-Fri) to targetDay.
-// Saturday -> previous Friday (or next Monday if at month start).
-// Sunday -> next Monday (or previous Friday if at month end).
-func findNearestWeekday(year int, month time.Month, targetDay int, loc *time.Location) int {
-	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
-	if targetDay < 1 || targetDay > lastDay {
-		return -1
-	}
-
-	t := time.Date(year, month, targetDay, 0, 0, 0, 0, loc)
-	wd := t.Weekday()
-
-	if wd >= time.Monday && wd <= time.Friday {
-		return targetDay
-	}
-
-	if wd == time.Saturday {
-		if targetDay-1 >= 1 {
-			return targetDay - 1
-		}
-		return targetDay + 2
-	}
-
-	if wd == time.Sunday {
-		if targetDay+1 <= lastDay {
-			return targetDay + 1
-		}
-		return targetDay - 2
-	}
-
-	return targetDay
-}
-
-// findLastWeekdayOfMonth returns the last occurrence of targetWeekday (0=Sun, 6=Sat).
-func findLastWeekdayOfMonth(year int, month time.Month, targetWeekday int, loc *time.Location) int {
-	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
-	for day := lastDay; day >= 1; day-- {
-		t := time.Date(year, month, day, 0, 0, 0, 0, loc)
-		if int(t.Weekday()) == targetWeekday {
-			return day
-		}
-	}
-	return -1
 }

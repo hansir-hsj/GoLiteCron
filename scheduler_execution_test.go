@@ -3,10 +3,21 @@ package golitecron
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// storeMax atomically raises *p to v if v is larger.
+func storeMax(p *int32, v int32) {
+	for {
+		cur := atomic.LoadInt32(p)
+		if v <= cur || atomic.CompareAndSwapInt32(p, cur, v) {
+			return
+		}
+	}
+}
 
 // TestTask_RetryOnError tests that task retries on error
 func TestTask_RetryOnError(t *testing.T) {
@@ -67,15 +78,20 @@ func TestTask_TimeoutExecution(t *testing.T) {
 	// The important thing is the scheduler didn't hang
 }
 
-// TestTask_TimeoutDoesNotWaitForContextIgnoringJob documents timeout semantics:
-// the scheduler stops waiting at the timeout, but a job that ignores ctx may
-// continue running until its function naturally returns.
-func TestTask_TimeoutDoesNotWaitForContextIgnoringJob(t *testing.T) {
+// TestTaskTimeoutKeepsContextIgnoringJobTracked documents timeout semantics:
+// Stop remains non-blocking, while the task stays tracked until it returns.
+func TestTaskTimeoutKeepsContextIgnoringJobTracked(t *testing.T) {
 	s := NewScheduler()
 
+	taskStarted := make(chan struct{})
 	taskCompleted := make(chan struct{})
+	releaseTask := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseTask) }) }
+	t.Cleanup(release)
 	job, _ := WrapJob("timeout-context-ignored", func() error {
-		time.Sleep(500 * time.Millisecond)
+		close(taskStarted)
+		<-releaseTask
 		close(taskCompleted)
 		return nil
 	})
@@ -85,13 +101,22 @@ func TestTask_TimeoutDoesNotWaitForContextIgnoringJob(t *testing.T) {
 	}
 
 	s.Start()
-	time.Sleep(1200 * time.Millisecond)
+	select {
+	case <-taskStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start")
+	}
+	time.Sleep(100 * time.Millisecond)
 
 	stopStart := time.Now()
 	s.Stop()
 	if elapsed := time.Since(stopStart); elapsed > 300*time.Millisecond {
 		t.Fatalf("Stop should not wait for context-ignoring timed-out job, took %v", elapsed)
 	}
+	if info, ok := s.GetTask("timeout-context-ignored"); !ok || !info.Running {
+		t.Fatal("timed-out job should remain tracked while it is still running")
+	}
+	release()
 
 	select {
 	case <-taskCompleted:
@@ -126,6 +151,29 @@ func TestTask_TimeoutSkipsRetry(t *testing.T) {
 	// because timeout skips retries
 	if count > 3 {
 		t.Fatalf("expected few attempts due to timeout skipping retries, got %d", count)
+	}
+}
+
+func TestTaskTimeoutDoesNotOverlapContextIgnoringJob(t *testing.T) {
+	s := NewScheduler()
+	var running int32
+	var maxRunning int32
+	job, _ := WrapJob("timeout-no-overlap", func() error {
+		current := atomic.AddInt32(&running, 1)
+		defer atomic.AddInt32(&running, -1)
+		storeMax(&maxRunning, current)
+		time.Sleep(1200 * time.Millisecond)
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithTimeout(50*time.Millisecond), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+	time.Sleep(3 * time.Second)
+	s.Stop()
+	if got := atomic.LoadInt32(&maxRunning); got != 1 {
+		t.Fatalf("expected no overlap, max concurrent executions = %d", got)
 	}
 }
 
@@ -232,14 +280,7 @@ func TestTask_PreventConcurrentExecution(t *testing.T) {
 	job, _ := WrapJob("no-concurrent", func() error {
 		current := atomic.AddInt32(&concurrentCount, 1)
 		defer atomic.AddInt32(&concurrentCount, -1)
-
-		// Track max concurrent
-		for {
-			max := atomic.LoadInt32(&maxConcurrent)
-			if current <= max || atomic.CompareAndSwapInt32(&maxConcurrent, max, current) {
-				break
-			}
-		}
+		storeMax(&maxConcurrent, current)
 
 		time.Sleep(200 * time.Millisecond)
 		return nil
@@ -303,7 +344,9 @@ func TestTask_SuccessfulExecution(t *testing.T) {
 
 	s.Start()
 	time.Sleep(2500 * time.Millisecond)
-	if err := s.Shutdown(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown failed: %v", err)
 	}
 
@@ -368,5 +411,30 @@ func TestTask_WithNegativeRetry(t *testing.T) {
 	// In 1.5 seconds with 1-second interval, expect 1-2 attempts
 	if count > 3 {
 		t.Fatalf("expected few attempts with no retry, got %d", count)
+	}
+}
+
+// TestTaskPanicTaskStaysScheduled tests that a panicking task keeps its
+// schedule instead of being silently dropped.
+func TestTaskPanicTaskStaysScheduled(t *testing.T) {
+	s := NewScheduler()
+
+	var runCount int32
+	job, _ := WrapJob("panic-stays", func() error {
+		atomic.AddInt32(&runCount, 1)
+		panic("intentional panic")
+	})
+
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	s.Start()
+	time.Sleep(3 * time.Second)
+	s.Stop()
+
+	// A dropped task would run exactly once; a rescheduled one runs >= 2.
+	if got := atomic.LoadInt32(&runCount); got < 2 {
+		t.Fatalf("expected panicking task to keep running, got %d runs", got)
 	}
 }

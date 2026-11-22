@@ -102,11 +102,11 @@ flowchart TB
 │ ┌───────────── hour (0-23)
 │ │ ┌───────────── day of month (1-31)
 │ │ │ ┌───────────── month (1-12)
-│ │ │ │ ┌───────────── day of week (0-6, Sunday=0)
+│ │ │ │ ┌───────────── day of week (0-7, Sunday=0 or 7)
 * * * * *
 ```
 
-**Special characters:** `*` (any) · `,` (list) · `-` (range) · `/` (step) · `L` (last) · `W` (weekday)
+**Special characters:** `*` (any) · `,` (list) · `-` (range) · `/` (step) · `L` (last) · `W` (weekday). Month and weekday names such as `JAN` and `MON` are supported.
 
 **Macros:** `@yearly` · `@monthly` · `@weekly` · `@daily` · `@hourly`
 

@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+func TestLoadTasksFromConfigAcceptsRegisteredJob(t *testing.T) {
+	scheduler := NewScheduler()
+	if err := scheduler.RegisterJob("custom", &testJob{id: "registered"}); err != nil {
+		t.Fatalf("RegisterJob failed: %v", err)
+	}
+
+	err := scheduler.LoadTasksFromConfig(&Config{Tasks: []TaskConfig{{
+		ID:       "configured-task",
+		CronExpr: "* * * * *",
+		FuncName: "custom",
+	}}})
+	if err != nil {
+		t.Fatalf("LoadTasksFromConfig failed: %v", err)
+	}
+	if _, ok := scheduler.GetTask("configured-task"); !ok {
+		t.Fatal("configured task was not loaded")
+	}
+	loaded, ok := scheduler.taskStorage.TaskByID("configured-task")
+	if !ok {
+		t.Fatal("configured task was not stored")
+	}
+	if loaded.Job.ID() != "configured-task" {
+		t.Fatalf("job ID = %q, want %q", loaded.Job.ID(), "configured-task")
+	}
+}
+
 func TestLoadFromYaml_Success(t *testing.T) {
 	// Create temp YAML file
 	content := `tasks:

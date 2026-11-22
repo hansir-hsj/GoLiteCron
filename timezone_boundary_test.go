@@ -5,13 +5,10 @@ import (
 	"time"
 )
 
-// ============================================================================
 // DST (Daylight Saving Time) Boundary Tests
-// ============================================================================
 
-// TestTimezone_DSTSpringForward tests behavior when clocks spring forward.
-// In the US, on the second Sunday of March, 2:00 AM becomes 3:00 AM.
-// Times between 2:00-3:00 don't exist on that day.
+// TestTimezone_DSTSpringForward covers the US spring-forward day,
+// when 2:00-3:00 AM does not exist.
 func TestTimezone_DSTSpringForward(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -39,9 +36,8 @@ func TestTimezone_DSTSpringForward(t *testing.T) {
 	}
 }
 
-// TestTimezone_DSTFallBack tests behavior when clocks fall back.
-// In the US, on the first Sunday of November, 2:00 AM becomes 1:00 AM.
-// Times between 1:00-2:00 occur twice on that day.
+// TestTimezone_DSTFallBack covers the US fall-back day,
+// when 1:00-2:00 AM occurs twice.
 func TestTimezone_DSTFallBack(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -91,9 +87,7 @@ func TestTimezone_DSTTransition_Europe(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Timezone Offset Boundary Tests
-// ============================================================================
 
 // TestTimezone_CrossDateLine tests scheduling across the international date line.
 func TestTimezone_CrossDateLine(t *testing.T) {
@@ -225,9 +219,7 @@ func TestTimezone_UTC_Extremes(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Location Change Tests
-// ============================================================================
 
 // TestTimezone_SwitchDuringCalculation tests Next() with different locations.
 func TestTimezone_SwitchDuringCalculation(t *testing.T) {
@@ -271,9 +263,7 @@ func TestTimezone_LocationConsistency(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Specific Date Boundary Tests with Timezones
-// ============================================================================
 
 // TestTimezone_NewYearCrossing tests year boundary in different timezones.
 func TestTimezone_NewYearCrossing(t *testing.T) {
@@ -344,5 +334,111 @@ func TestTimezone_WithSeconds(t *testing.T) {
 	diff := next.Sub(now)
 	if diff > 10*time.Second || diff < 0 {
 		t.Errorf("Expected next within 10 seconds, got %v", diff)
+	}
+}
+
+// TestTimezoneDSTSpringForwardSkipsGap asserts a time inside the spring-forward
+// gap is skipped rather than mapped to a wrong wall-clock time.
+func TestTimezoneDSTSpringForwardSkipsGap(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("America/New_York timezone not available")
+	}
+	parser := mustCronParser(t, "30 2 * * *", WithLocation(loc))
+	before := time.Date(2024, 3, 10, 0, 0, 0, 0, loc)
+	next := parser.Next(before)
+	want := time.Date(2024, 3, 11, 2, 30, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Errorf("expected %v, got %v", want, next)
+	}
+}
+
+func TestTimezoneDSTSpringForwardSkipsGapEurope(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skip("Europe/London timezone not available")
+	}
+	parser := mustCronParser(t, "30 1 * * *", WithLocation(loc))
+	before := time.Date(2024, 3, 31, 0, 0, 0, 0, loc)
+	next := parser.Next(before)
+	want := time.Date(2024, 4, 1, 1, 30, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Errorf("expected %v, got %v", want, next)
+	}
+}
+
+func TestTimezoneDSTSpringForwardSkipsGapSeconds(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("America/New_York timezone not available")
+	}
+	parser := mustCronParser(t, "0 * * * * *", WithSeconds(), WithLocation(loc))
+	before := time.Date(2024, 3, 10, 1, 59, 30, 0, loc)
+	next := parser.Next(before)
+	want := time.Date(2024, 3, 10, 3, 0, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Errorf("expected %v, got %v", want, next)
+	}
+}
+
+func TestTimezoneDSTFallBackNextStaysAfterInput(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("America/New_York timezone not available")
+	}
+	parser := mustCronParser(t, "30 1 * * *", WithLocation(loc))
+
+	first := time.Date(2024, 11, 3, 1, 30, 0, 0, loc)
+	second := first.Add(time.Hour)
+	next := parser.Next(second.Add(-time.Minute))
+	if !next.Equal(second) {
+		t.Fatalf("Next returned wrong repeated time: got=%v want=%v", next, second)
+	}
+}
+
+// TestTimezoneDSTFallBackSkipsRepeatedHour asserts every-minute and stepped
+// schedules both leave the repeated hour once its first pass ends.
+func TestTimezoneDSTFallBackSkipsRepeatedHour(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("America/New_York timezone not available")
+	}
+	want := time.Date(2024, 11, 3, 7, 0, 0, 0, time.UTC) // 02:00 EST
+	for _, tt := range []struct {
+		expr  string
+		after time.Time
+	}{
+		{"* * * * *", time.Date(2024, 11, 3, 5, 59, 0, 0, time.UTC)},    // 01:59 EDT
+		{"*/10 * * * *", time.Date(2024, 11, 3, 5, 50, 0, 0, time.UTC)}, // 01:50 EDT
+	} {
+		parser := mustCronParser(t, tt.expr, WithLocation(loc))
+		if next := parser.Next(tt.after.In(loc)); !next.Equal(want) {
+			t.Errorf("%q Next(%v) = %v, want %v", tt.expr, tt.after.In(loc), next, want.In(loc))
+		}
+	}
+}
+
+// TestTimezoneDSTFallBackEuropeRunsFirstPass asserts the repeated hour runs on
+// its first pass in zones where time.Date resolves to the second one.
+func TestTimezoneDSTFallBackEuropeRunsFirstPass(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skip("Europe/London timezone not available")
+	}
+	// 2024-10-27: 02:00 BST falls back to 01:00 GMT.
+	tests := []struct {
+		expr  string
+		after time.Time
+		want  time.Time
+	}{
+		{"* * * * *", time.Date(2024, 10, 26, 23, 59, 0, 0, time.UTC), time.Date(2024, 10, 27, 0, 0, 0, 0, time.UTC)},  // 01:00 BST
+		{"* * * * *", time.Date(2024, 10, 27, 0, 59, 0, 0, time.UTC), time.Date(2024, 10, 27, 2, 0, 0, 0, time.UTC)},   // 02:00 GMT
+		{"30 1 * * *", time.Date(2024, 10, 26, 23, 0, 0, 0, time.UTC), time.Date(2024, 10, 27, 0, 30, 0, 0, time.UTC)}, // 01:30 BST
+	}
+	for _, tt := range tests {
+		parser := mustCronParser(t, tt.expr, WithLocation(loc))
+		if next := parser.Next(tt.after.In(loc)); !next.Equal(tt.want) {
+			t.Errorf("%q Next(%v) = %v, want %v", tt.expr, tt.after.In(loc), next.In(loc), tt.want.In(loc))
+		}
 	}
 }

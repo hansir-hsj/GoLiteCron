@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -447,5 +448,38 @@ func TestScheduleBuilderWithOptions(t *testing.T) {
 	}
 	if task.Location != shanghaiLoc {
 		t.Errorf("expected location Shanghai, got %v", task.Location)
+	}
+}
+
+// TestScheduleBuilderRejectsUnsupportedCombinations tests that combinations
+// cron cannot express return an error instead of being silently ignored.
+func TestScheduleBuilderRejectsUnsupportedCombinations(t *testing.T) {
+	scheduler := NewScheduler()
+
+	cases := []struct {
+		name    string
+		builder func() *ScheduleBuilder
+		wantErr string
+	}{
+		{"Every(5).Monday()", func() *ScheduleBuilder { return scheduler.Every(5).Monday() }, "Weekday unit"},
+		{"Every().Minute().At()", func() *ScheduleBuilder { return scheduler.Every().Minute().At("10:30") }, "minute unit"},
+		{"Every(2).Seconds().At()", func() *ScheduleBuilder { return scheduler.Every(2).Seconds().At("10:30") }, "second unit"},
+		{"Every().Hour().At()", func() *ScheduleBuilder { return scheduler.Every().Hour().At("10:30") }, "hour unit"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.builder().Do(func() {}); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("Do() error = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	// sanity: supported combinations still work
+	if err := scheduler.Every().Monday().Do(func() {}); err != nil {
+		t.Fatalf("Every().Monday() should work: %v", err)
+	}
+	if err := scheduler.Every().Day().At("10:30").Do(func() {}); err != nil {
+		t.Fatalf("Every().Day().At() should work: %v", err)
 	}
 }

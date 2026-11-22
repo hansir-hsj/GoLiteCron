@@ -57,6 +57,25 @@ func (tq *taskQueue) TaskExist(taskID string) bool {
 	return exists
 }
 
+func (tq *taskQueue) TaskByID(taskID string) (*task, bool) {
+	tq.mu.RLock()
+	defer tq.mu.RUnlock()
+
+	idx, ok := tq.taskIdx[taskID]
+	if !ok || idx < 0 || idx >= len(tq.tasks) {
+		return nil, false
+	}
+	return tq.tasks[idx], true
+}
+
+func (tq *taskQueue) TaskInfoByID(taskID string) (TaskInfo, bool) {
+	task, ok := tq.TaskByID(taskID)
+	if !ok {
+		return TaskInfo{}, false
+	}
+	return newTaskInfo(task, false), true
+}
+
 func (tq *taskQueue) AddTask(task *task) {
 	tq.mu.Lock()
 	defer tq.mu.Unlock()
@@ -65,20 +84,30 @@ func (tq *taskQueue) AddTask(task *task) {
 }
 
 func (tq *taskQueue) GetTasks() []TaskInfo {
+	tasks := tq.taskInfos()
+	sortTaskInfos(tasks)
+	return tasks
+}
+
+// taskInfos returns unsorted snapshots of queued tasks.
+func (tq *taskQueue) taskInfos() []TaskInfo {
 	tq.mu.RLock()
 	defer tq.mu.RUnlock()
 
 	tasks := make([]TaskInfo, 0, len(tq.tasks))
 	for _, task := range tq.tasks {
-		tasks = append(tasks, newTaskInfo(task))
+		tasks = append(tasks, newTaskInfo(task, false))
 	}
+	return tasks
+}
+
+func sortTaskInfos(tasks []TaskInfo) {
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].NextRunTime.Equal(tasks[j].NextRunTime) {
 			return tasks[i].ID < tasks[j].ID
 		}
 		return tasks[i].NextRunTime.Before(tasks[j].NextRunTime)
 	})
-	return tasks
 }
 
 func (tq *taskQueue) RemoveTaskByID(taskID string) {

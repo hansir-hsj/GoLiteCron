@@ -2,6 +2,7 @@ package golitecron
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"sync"
@@ -126,6 +127,7 @@ func TestScheduler_StopWaitsForRunningTasks(t *testing.T) {
 	}
 
 	s.Start()
+	defer s.Stop()
 
 	// Wait for task to start
 	select {
@@ -134,9 +136,11 @@ func TestScheduler_StopWaitsForRunningTasks(t *testing.T) {
 		t.Fatal("task did not start within timeout")
 	}
 
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	shutdownDone := make(chan error, 1)
 	go func() {
-		shutdownDone <- s.Shutdown(context.Background())
+		shutdownDone <- s.Shutdown(shutdownCtx)
 	}()
 
 	select {
@@ -153,6 +157,262 @@ func TestScheduler_StopWaitsForRunningTasks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Shutdown did not return within timeout")
+	}
+}
+
+// TestSchedulerStartDuringShutdownDoesNotBlock tests that Start returns while
+// Shutdown is still waiting for tasks started before it.
+func TestSchedulerStartDuringShutdownDoesNotBlock(t *testing.T) {
+	s := NewScheduler()
+
+	taskStarted := make(chan struct{})
+	var startedOnce sync.Once
+	job, _ := WrapJob("slow-drain", func() error {
+		startedOnce.Do(func() { close(taskStarted) })
+		time.Sleep(3 * time.Second)
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+	// The restarted run may start another 3s execution; wait for it so it cannot leak.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.Shutdown(ctx)
+	})
+	s.Start()
+	select {
+	case <-taskStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- s.Shutdown(ctx) }()
+
+	time.Sleep(300 * time.Millisecond) // drain in progress
+
+	startDone := make(chan struct{})
+	go func() {
+		s.Start()
+		close(startDone)
+	}()
+
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("Start blocked on an in-progress Shutdown")
+	}
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned %v before the running task finished", err)
+	default:
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Shutdown did not return")
+	}
+}
+
+type panicLogger struct{}
+
+func (panicLogger) Printf(string, ...any) { panic("logger failure") }
+
+func TestSchedulerPanickingLoggerKeepsTaskScheduled(t *testing.T) {
+	s := NewScheduler()
+	if err := s.WithLogger(panicLogger{}); err != nil {
+		t.Fatalf("WithLogger failed: %v", err)
+	}
+	var runs int32
+	job, _ := WrapJob("logger-panic", func() error {
+		atomic.AddInt32(&runs, 1)
+		return errors.New("logged failure")
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+	s.Start()
+	time.Sleep(2500 * time.Millisecond)
+	s.Stop()
+	if got := atomic.LoadInt32(&runs); got < 2 {
+		t.Fatalf("expected task to keep running despite logger panics, got %d runs", got)
+	}
+}
+
+func TestSchedulerLifecycleInterleaving(t *testing.T) {
+	s := NewScheduler()
+	if err := s.WithTickDuration(5 * time.Millisecond); err != nil {
+		t.Fatalf("WithTickDuration failed: %v", err)
+	}
+	var runs int32
+	job, _ := WrapJob("interleave", func(ctx context.Context) error {
+		atomic.AddInt32(&runs, 1)
+		select {
+		case <-ctx.Done():
+		case <-time.After(20 * time.Millisecond):
+		}
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	// Run for at least two second boundaries so Shutdown also meets running tasks.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		for w := 0; w < 3; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				for i := 0; i < 220; i++ {
+					switch (i + w) % 3 {
+					case 0:
+						s.Start()
+					case 1:
+						s.Stop()
+					default:
+						ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+						_ = s.Shutdown(ctx)
+						cancel()
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}(w)
+		}
+		wg.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("interleaved Start/Stop/Shutdown deadlocked")
+	}
+	s.Stop()
+	if atomic.LoadInt32(&runs) == 0 {
+		t.Fatal("expected the task to run during the interleaving")
+	}
+}
+
+func TestSchedulerConfigurationValidation(t *testing.T) {
+	s := NewScheduler()
+	if err := s.WithLogger(nil); err == nil {
+		t.Fatal("expected nil logger error")
+	}
+	if err := s.WithTickDuration(0); err == nil {
+		t.Fatal("expected invalid tick duration error")
+	}
+	if err := s.WithTickDuration(10 * time.Millisecond); err != nil {
+		t.Fatalf("WithTickDuration failed: %v", err)
+	}
+	s.Start()
+	defer s.Stop()
+	if err := s.WithTickDuration(time.Second); err == nil {
+		t.Fatal("expected error while scheduler is running")
+	}
+}
+
+func TestSchedulerShutdownFromJobReturnsError(t *testing.T) {
+	s := NewScheduler()
+	result := make(chan error, 1)
+	job, _ := WrapJob("self-shutdown", func(ctx context.Context) error {
+		result <- s.Shutdown(ctx)
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+	s.Start()
+	defer s.Stop()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrShutdownFromJob) {
+			t.Fatalf("Shutdown error = %v, want %v", err, ErrShutdownFromJob)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown called from job deadlocked")
+	}
+}
+
+func TestSchedulerRepeatedShutdownWaitsForEarlierTasks(t *testing.T) {
+	s := NewScheduler()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	var once sync.Once
+	job, _ := WrapJob("repeat-shutdown", func() error {
+		once.Do(func() {
+			close(started)
+			<-release
+			close(finished)
+		})
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+	s.Start()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("task did not start")
+	}
+
+	short, cancelShort := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelShort()
+	if err := s.Shutdown(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Shutdown error = %v, want deadline exceeded", err)
+	}
+
+	second := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		second <- s.Shutdown(ctx)
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second Shutdown returned %v before the earlier task finished", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatalf("second Shutdown failed: %v", err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("second Shutdown returned before the task finished")
+	}
+}
+
+func TestSchedulerShutdownFromJobWithNewContextCannotDeadlock(t *testing.T) {
+	s := NewScheduler()
+	result := make(chan error, 1)
+	job, _ := WrapJob("self-shutdown-new-context", func(context.Context) error {
+		result <- s.Shutdown(context.Background())
+		return nil
+	})
+	if err := s.AddTask("* * * * * *", job, WithSeconds(), WithLocation(time.UTC)); err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+	s.Start()
+	defer s.Stop()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrShutdownDeadlineRequired) {
+			t.Fatalf("Shutdown error = %v, want %v", err, ErrShutdownDeadlineRequired)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown called from job deadlocked")
 	}
 }
 
@@ -396,8 +656,8 @@ func TestScheduler_AddTaskDoesNotHoldTaskLockWhileParsing(t *testing.T) {
 
 type testTaskOption func(*taskSettings)
 
-func (opt testTaskOption) applyTaskOption(settings *taskSettings) {
-	opt(settings)
+func (t testTaskOption) applyTaskOption(settings *taskSettings) {
+	t(settings)
 }
 
 // TestScheduler_RemoveTaskByIDDuringExecutionDoesNotReschedule verifies ID-based

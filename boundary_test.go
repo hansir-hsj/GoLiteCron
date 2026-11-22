@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-// ============================================================================
 // Unix Timestamp Boundary Tests
-// ============================================================================
 
 // TestBoundary_UnixEpoch tests behavior at Unix epoch (1970-01-01 00:00:00 UTC).
 func TestBoundary_UnixEpoch(t *testing.T) {
@@ -93,9 +91,7 @@ func TestBoundary_Year1970(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Leap Year Boundary Tests
-// ============================================================================
 
 // TestBoundary_LeapYear_Feb29 tests February 29 scheduling in leap years.
 func TestBoundary_LeapYear_Feb29(t *testing.T) {
@@ -134,9 +130,7 @@ func TestBoundary_LeapYear_Feb29(t *testing.T) {
 
 // TestBoundary_LeapYear_Century tests century leap year rules.
 func TestBoundary_LeapYear_Century(t *testing.T) {
-	// Century leap year rules:
-	// - Divisible by 400 = leap year (2000, 2400)
-	// - Divisible by 100 but not 400 = not leap year (2100, 2200, 2300)
+	// Centuries are leap years only when divisible by 400.
 	testCases := []struct {
 		year   int
 		isLeap bool
@@ -166,9 +160,7 @@ func TestBoundary_LeapYear_Century(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Month End Boundary Tests
-// ============================================================================
 
 // TestBoundary_MonthEnd_AllMonths tests month-end scheduling for all months.
 func TestBoundary_MonthEnd_AllMonths(t *testing.T) {
@@ -226,9 +218,7 @@ func TestBoundary_Day31_ShortMonths(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Year Boundary Tests
-// ============================================================================
 
 // TestBoundary_YearEnd tests year-end to year-start transition.
 func TestBoundary_YearEnd(t *testing.T) {
@@ -264,9 +254,7 @@ func TestBoundary_YearStart(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Seconds Field Boundary Tests
-// ============================================================================
 
 // TestBoundary_Seconds_Max tests second field at maximum value.
 func TestBoundary_Seconds_Max(t *testing.T) {
@@ -315,9 +303,7 @@ func TestBoundary_Seconds_StepValues(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // 7-Field (Seconds + Years) Complete Tests
-// ============================================================================
 
 // TestBoundary_7Fields_Complete tests full 7-field cron expressions.
 func TestBoundary_7Fields_Complete(t *testing.T) {
@@ -394,9 +380,7 @@ func TestBoundary_7Fields_YearRange(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Edge Cases: Invalid/Impossible Dates
-// ============================================================================
 
 // TestBoundary_ImpossibleDate tests scheduling for dates that never occur.
 func TestBoundary_ImpossibleDate(t *testing.T) {
@@ -439,9 +423,7 @@ func TestBoundary_WeekdayAndMonthday(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Minute/Hour Rollover Tests
-// ============================================================================
 
 // TestBoundary_MinuteRollover tests minute boundaries.
 func TestBoundary_MinuteRollover(t *testing.T) {

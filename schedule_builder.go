@@ -1,6 +1,7 @@
 package golitecron
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -185,15 +186,13 @@ func (sb *ScheduleBuilder) Do(job any, taskID ...string) error {
 
 	var wrapErr error
 	switch j := job.(type) {
-	case func() error:
+	case func() error, Job:
 		wrappedJob, wrapErr = WrapJob(id, j)
 	case func():
 		wrappedJob, wrapErr = WrapJob(id, func() error {
 			j()
 			return nil
 		})
-	case Job:
-		wrappedJob, wrapErr = WrapJob(id, j.Execute)
 	default:
 		return fmt.Errorf("unsupported job type: %T", job)
 	}
@@ -220,14 +219,20 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 
 	switch sb.unit {
 	case "second":
+		if sb.timeSpec != "" {
+			return "", errors.New("at() is not supported with second unit")
+		}
 		if sb.interval == 1 {
 			cronExpr = "* * * * * *"
 		} else {
 			cronExpr = fmt.Sprintf("*/%d * * * * *", sb.interval)
 		}
-		sb.WithSeconds() // Use method to avoid duplicate
+		sb.WithSeconds()
 
 	case "minute":
+		if sb.timeSpec != "" {
+			return "", errors.New("at() is not supported with minute unit")
+		}
 		if sb.interval == 1 {
 			cronExpr = "* * * * *"
 		} else {
@@ -235,6 +240,9 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 		}
 
 	case "hour":
+		if sb.timeSpec != "" {
+			return "", errors.New("at() is not supported with hour unit")
+		}
 		if sb.interval == 1 {
 			cronExpr = "0 * * * *"
 		} else {
@@ -243,7 +251,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 
 	case "day":
 		if sb.interval > 1 {
-			return "", fmt.Errorf("interval > 1 not supported for Day unit (cron cannot express 'every N days')")
+			return "", errors.New("interval > 1 not supported for Day unit (cron cannot express 'every N days')")
 		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
@@ -252,7 +260,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * *", second, minute, hour)
-				sb.WithSeconds() // Use method to avoid duplicate
+				sb.WithSeconds()
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * *", minute, hour)
 			}
@@ -262,7 +270,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 
 	case "week":
 		if sb.interval > 1 {
-			return "", fmt.Errorf("interval > 1 not supported for Week unit (cron cannot express 'every N weeks')")
+			return "", errors.New("interval > 1 not supported for Week unit (cron cannot express 'every N weeks')")
 		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
@@ -271,7 +279,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * 0", second, minute, hour)
-				sb.WithSeconds() // Use method to avoid duplicate
+				sb.WithSeconds()
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * 0", minute, hour)
 			}
@@ -281,7 +289,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 
 	case "month":
 		if sb.interval > 1 {
-			return "", fmt.Errorf("interval > 1 not supported for Month unit (cron cannot express 'every N months')")
+			return "", errors.New("interval > 1 not supported for Month unit (cron cannot express 'every N months')")
 		}
 		if sb.timeSpec != "" {
 			hour, minute, second, err := sb.parseTimeSpec()
@@ -290,7 +298,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d 1 * *", second, minute, hour)
-				sb.WithSeconds() // Use method to avoid duplicate
+				sb.WithSeconds()
 			} else {
 				cronExpr = fmt.Sprintf("%d %d 1 * *", minute, hour)
 			}
@@ -299,6 +307,9 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 		}
 
 	case "weekday":
+		if sb.interval > 1 {
+			return "", errors.New("interval > 1 not supported for Weekday unit (cron cannot express 'every N weekdays')")
+		}
 		weekdayNum := int(sb.weekday)
 
 		if sb.timeSpec != "" {
@@ -308,7 +319,7 @@ func (sb *ScheduleBuilder) buildCronExpression() (string, error) {
 			}
 			if second >= 0 {
 				cronExpr = fmt.Sprintf("%d %d %d * * %d", second, minute, hour, weekdayNum)
-				sb.WithSeconds() // Use method to avoid duplicate
+				sb.WithSeconds()
 			} else {
 				cronExpr = fmt.Sprintf("%d %d * * %d", minute, hour, weekdayNum)
 			}

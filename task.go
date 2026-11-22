@@ -11,10 +11,11 @@ type TaskInfo struct {
 	NextRunTime time.Time
 	PreRunTime  time.Time
 	Running     bool
-	Removed     bool
-	Location    *time.Location
-	Timeout     time.Duration
-	Retry       int
+	// Deprecated: always false; removed tasks are not returned in snapshots.
+	Removed  bool
+	Location *time.Location
+	Timeout  time.Duration
+	Retry    int
 }
 
 type taskOptions struct {
@@ -30,17 +31,15 @@ type task struct {
 	NextRunTime time.Time
 	PreRunTime  time.Time
 
-	Running int32
 	Removed int32 // Set to 1 when task is explicitly removed by user
 }
 
-func newTaskInfo(task *task) TaskInfo {
+func newTaskInfo(task *task, running bool) TaskInfo {
 	info := TaskInfo{
 		ID:          task.ID,
 		NextRunTime: task.NextRunTime,
 		PreRunTime:  task.PreRunTime,
-		Running:     task.Running == 1,
-		Removed:     task.Removed == 1,
+		Running:     running,
 	}
 
 	if task.CronParser != nil {

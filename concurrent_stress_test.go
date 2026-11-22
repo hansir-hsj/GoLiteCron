@@ -11,9 +11,7 @@ import (
 	"time"
 )
 
-// ============================================================================
 // Massive Concurrent Add/Remove Tests
-// ============================================================================
 
 // TestConcurrent_MassiveAddRemove tests high-volume concurrent task operations.
 func TestConcurrent_MassiveAddRemove(t *testing.T) {
@@ -161,9 +159,7 @@ func TestConcurrent_RemoveWhileTicking(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Multiple Scheduler Tests
-// ============================================================================
 
 // TestConcurrent_MultipleSchedulers tests running many schedulers in parallel.
 func TestConcurrent_MultipleSchedulers(t *testing.T) {
@@ -213,9 +209,7 @@ func TestConcurrent_MultipleSchedulers(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Race Condition Detection Tests (run with -race flag)
-// ============================================================================
 
 // TestConcurrent_RaceCondition_AddGetRemove tests for race conditions in basic operations.
 func TestConcurrent_RaceCondition_AddGetRemove(t *testing.T) {
@@ -282,9 +276,7 @@ func TestConcurrent_RaceCondition_NextCalculation(t *testing.T) {
 	t.Log("Concurrent Next() completed (run with -race to detect issues)")
 }
 
-// ============================================================================
 // High Load Tests
-// ============================================================================
 
 // TestConcurrent_HighLoad_1000Tasks tests scheduler with 1000 tasks.
 func TestConcurrent_HighLoad_1000Tasks(t *testing.T) {
@@ -352,9 +344,7 @@ func TestConcurrent_HighLoad_10000Tasks(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Rapid Start/Stop Tests
-// ============================================================================
 
 // TestConcurrent_RapidStartStop tests rapid start/stop cycles.
 func TestConcurrent_RapidStartStop(t *testing.T) {
@@ -415,9 +405,7 @@ func TestConcurrent_ConcurrentStartStop(t *testing.T) {
 	t.Log("Concurrent start/stop completed without panic")
 }
 
-// ============================================================================
 // Storage Backend Concurrent Tests
-// ============================================================================
 
 // TestConcurrent_taskQueue_Operations tests the internal queue under concurrent access.
 func TestConcurrent_taskQueue_Operations(t *testing.T) {
@@ -470,9 +458,7 @@ func TestConcurrent_taskQueue_Operations(t *testing.T) {
 	t.Log("taskQueue concurrent operations completed")
 }
 
-// ============================================================================
 // task Execution Concurrent Tests
-// ============================================================================
 
 // TestConcurrent_TaskExecution_NoOverlap ensures same task doesn't run concurrently.
 func TestConcurrent_TaskExecution_NoOverlap(t *testing.T) {
@@ -547,9 +533,7 @@ func TestConcurrent_MultipleTasks_Parallel(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Context Cancellation Tests
-// ============================================================================
 
 // TestConcurrent_ContextCancellation tests task cancellation via context.
 func TestConcurrent_ContextCancellation(t *testing.T) {
@@ -584,9 +568,7 @@ func TestConcurrent_ContextCancellation(t *testing.T) {
 	}
 }
 
-// ============================================================================
 // Stress Test: Combined Operations
-// ============================================================================
 
 // TestConcurrent_CombinedStress performs combined stress testing.
 func TestConcurrent_CombinedStress(t *testing.T) {

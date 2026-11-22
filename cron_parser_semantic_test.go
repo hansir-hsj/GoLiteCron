@@ -17,10 +17,7 @@ func TestCron_DayOfMonthORDayOfWeek(t *testing.T) {
 	start := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	next := parser.Next(start)
 
-	// Jan 1, 2024 is a Monday, so next should be Jan 2, 2024 (first minute after start on a Monday)
-	// Actually, Jan 1 is Monday at 00:00, so next Monday time would be Jan 8 00:00
-	// But 15th is Jan 15, and Monday comes first at Jan 8
-	// So next should be Jan 8, 2024 (Monday) at 00:00
+	// Jan 1 00:00 itself is excluded; the next Monday (Jan 8) comes before the 15th.
 	expected := time.Date(2024, time.January, 8, 0, 0, 0, 0, time.UTC)
 	if !next.Equal(expected) {
 		t.Errorf("expected %v, got %v", expected, next)

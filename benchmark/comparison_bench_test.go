@@ -9,9 +9,7 @@ import (
 	robfigcron "github.com/robfig/cron/v3"
 )
 
-// ============================================================================
 // Cron Expression Parsing Comparison
-// ============================================================================
 
 func BenchmarkComparison_Parse_Simple_GoLiteCron(b *testing.B) {
 	expr := "0 0 * * *"
@@ -55,9 +53,7 @@ func BenchmarkComparison_Parse_Complex_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Next() Calculation Comparison - Core Scheduling Algorithm
-// ============================================================================
 
 func BenchmarkComparison_Next_Simple_GoLiteCron(b *testing.B) {
 	parser, _ := golitecron.Parse("0 0 * * *")
@@ -128,9 +124,7 @@ func BenchmarkComparison_Next_Minutely_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Sequential Next() - Simulating Real Scheduling
-// ============================================================================
 
 func BenchmarkComparison_NextSequential100_GoLiteCron(b *testing.B) {
 	parser, _ := golitecron.Parse("0 0 * * *")
@@ -159,9 +153,7 @@ func BenchmarkComparison_NextSequential100_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Scheduler Add Task Comparison
-// ============================================================================
 
 func BenchmarkComparison_AddTasks100_GoLiteCron(b *testing.B) {
 	b.ReportAllocs()
@@ -209,9 +201,7 @@ func BenchmarkComparison_AddTasks1000_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Scheduler Start/Stop Comparison
-// ============================================================================
 
 func BenchmarkComparison_StartStop_GoLiteCron(b *testing.B) {
 	b.ReportAllocs()
@@ -236,9 +226,7 @@ func BenchmarkComparison_StartStop_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Seconds Precision Comparison (robfig/cron also supports seconds)
-// ============================================================================
 
 func BenchmarkComparison_Parse_WithSeconds_GoLiteCron(b *testing.B) {
 	expr := "*/10 * * * * *"
@@ -284,9 +272,7 @@ func BenchmarkComparison_Next_WithSeconds_RobfigCron(b *testing.B) {
 	}
 }
 
-// ============================================================================
 // Parallel Comparison
-// ============================================================================
 
 func BenchmarkComparison_Next_Parallel_GoLiteCron(b *testing.B) {
 	parser, _ := golitecron.Parse("*/15 9-17 * * 1-5")

@@ -115,11 +115,8 @@ scheduler.Every().Sunday().At("08:00").Do(job)
 ### 每周和每月
 
 ```go
-// 每周 (周日午夜)
+// 每周 (周日午夜)，不支持大于 1 的周间隔
 scheduler.Every().Week().Do(job)
-
-// 每2周
-scheduler.Every(2).Weeks().Do(job)
 
 // 每月 (1号午夜)
 scheduler.Every().Month().Do(job)
@@ -177,7 +174,7 @@ if err != nil {
 ```
 * * * * *
 │ │ │ │ │
-│ │ │ │ └── 星期 (0-6, 周日=0)
+│ │ │ │ └── 星期 (0-7, 周日=0或7)
 │ │ │ └─── 月份 (1-12)
 │ │ └───── 日 (1-31)
 │ └─────── 小时 (0-23)
@@ -188,7 +185,7 @@ if err != nil {
 ```
 * * * * * *
 │ │ │ │ │ │
-│ │ │ │ │ └── 星期 (0-6)
+│ │ │ │ │ └── 星期 (0-7)
 │ │ │ │ └─── 月份 (1-12)
 │ │ │ └───── 日 (1-31)
 │ │ └─────── 小时 (0-23)
@@ -201,7 +198,7 @@ if err != nil {
 * * * * * * *
 │ │ │ │ │ │ │
 │ │ │ │ │ │ └── 年份 (1970-2099)
-│ │ │ │ │ └── 星期 (0-6)
+│ │ │ │ │ └── 星期 (0-7)
 │ │ │ │ └─── 月份 (1-12)
 │ │ │ └───── 日 (1-31)
 │ │ └─────── 小时 (0-23)
@@ -217,8 +214,10 @@ if err != nil {
 | `,` | 值列表 | `1,15,30 * * * *` - 第1, 15, 30分钟 |
 | `-` | 范围 | `1-5 * * * *` - 第1到5分钟 |
 | `/` | 步长 | `*/15 * * * *` - 每15分钟 |
-| `L` | 最后 | `0 0 L * *` - 每月最后一天 |
+| `L` | 最后 | `0 0 L * *` - 每月最后一天；星期字段 `5L` - 最后一个周五。日字段只接受单独的 `L` |
 | `W` | 最近工作日 | `0 0 15W * *` - 最接近15号的工作日 |
+
+夏令时回拨当天，重复的那一小时不会执行两遍：任务在第一遍中执行后，下一次是重复时段之后的第一个匹配时刻。夏令时开始当天，落在被跳过那一小时内的时刻当天不执行。
 
 ### 示例
 
@@ -300,7 +299,7 @@ scheduler.AddTask("*/30 * * * * *", job, cron.WithSeconds())
 启用含年份的7字段 cron 表达式。
 
 ```go
-scheduler.AddTask("0 0 1 1 * 2025", job, cron.WithSeconds(), cron.WithYears())
+scheduler.AddTask("0 0 0 1 1 * 2025", job, cron.WithSeconds(), cron.WithYears())
 ```
 
 ## 从配置文件加载
@@ -342,6 +341,8 @@ import (
 )
 
 func main() {
+    scheduler := cron.NewScheduler()
+
     // 首先注册任务函数
     scheduler.RegisterJob("backupDatabase", func() error {
         fmt.Println("备份数据库...")
@@ -359,8 +360,7 @@ func main() {
         log.Fatalf("加载配置失败: %v", err)
     }
 
-    // 创建调度器并加载任务
-    scheduler := cron.NewScheduler()
+    // 加载任务
     if err := scheduler.LoadTasksFromConfig(config); err != nil {
         log.Fatalf("加载任务失败: %v", err)
     }
@@ -404,7 +404,7 @@ if removed {
 }
 ```
 
-推荐使用 `RemoveTaskByID` 移除任务。它也会阻止正在运行的同 ID 任务在结束后重新调度。`GetTasks()` 返回只读 `TaskInfo` 快照。
+推荐使用 `RemoveTaskByID` 移除任务。它也会阻止正在运行的同 ID 任务在结束后重新调度。`GetTasks()` 返回包括运行中任务在内的只读 `TaskInfo` 快照。
 
 
 ## 最佳实践
@@ -431,9 +431,9 @@ if removed {
    - 服务器间一致性建议使用 UTC
 
 7. **优雅关闭**
-   - 只需要停止调度新任务时使用 `scheduler.Stop()`
-   - 需要取消支持 context 的任务并等待已跟踪任务完成时，使用 `scheduler.Shutdown(ctx)`
-   - 已超时或已取消但忽略 `context.Context` 的任务，可能会在调度器等待之外继续运行
+   - 只需要停止调度新任务时使用 `scheduler.Stop()`；运行中的任务完成后会保留下一次调度。
+   - 需要取消支持 context 的任务并等待已跟踪任务完成时，使用 `scheduler.Shutdown(ctx)`。不要在该 scheduler 正在执行的 Job 内调用它。
+   - 已超时但忽略 `context.Context` 的任务会继续被跟踪，返回前不会与下一次执行重叠
 
 ## 示例代码
 

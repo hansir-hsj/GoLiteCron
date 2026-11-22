@@ -2,6 +2,7 @@ package golitecron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -12,7 +13,7 @@ type FuncJob struct {
 
 func (fj *FuncJob) Execute(ctx context.Context) error {
 	if fj.fn == nil {
-		return fmt.Errorf("function is not set")
+		return errors.New("function is not set")
 	}
 	return fj.fn(ctx)
 }
@@ -28,7 +29,7 @@ func setJobID(job Job, id string) Job {
 	return job
 }
 
-// WrapJob wraps a function as a Job. Supports func() error or func(context.Context) error.
+// WrapJob wraps func() error, func(context.Context) error, or a Job (rebound to id).
 func WrapJob(id string, fn any) (Job, error) {
 	switch f := fn.(type) {
 	case func() error:
@@ -41,7 +42,12 @@ func WrapJob(id string, fn any) (Job, error) {
 			id: id,
 			fn: f,
 		}, nil
+	case Job:
+		return &FuncJob{
+			id: id,
+			fn: f.Execute,
+		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported function signature: %T (expected func() error or func(context.Context) error)", fn)
+		return nil, fmt.Errorf("unsupported function signature: %T (expected func() error, func(context.Context) error, or Job)", fn)
 	}
 }
