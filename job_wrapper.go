@@ -29,9 +29,14 @@ func setJobID(job Job, id string) Job {
 	return job
 }
 
-// WrapJob wraps func() error, func(context.Context) error, or a Job (rebound to id).
+// WrapJob wraps func(), func() error, func(context.Context) error, or a Job (rebound to id).
 func WrapJob(id string, fn any) (Job, error) {
 	switch f := fn.(type) {
+	case func():
+		return &FuncJob{
+			id: id,
+			fn: func(_ context.Context) error { f(); return nil },
+		}, nil
 	case func() error:
 		return &FuncJob{
 			id: id,
@@ -48,6 +53,6 @@ func WrapJob(id string, fn any) (Job, error) {
 			fn: f.Execute,
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported function signature: %T (expected func() error, func(context.Context) error, or Job)", fn)
+		return nil, fmt.Errorf("unsupported function signature: %T (expected func(), func() error, func(context.Context) error, or Job)", fn)
 	}
 }

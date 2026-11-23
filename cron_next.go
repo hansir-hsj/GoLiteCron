@@ -246,7 +246,8 @@ func (p *CronParser) nextValidDay(year int, month time.Month, startDay int) (int
 	return 0, false
 }
 
-// isDayValid checks dayOfMonth/dayOfWeek constraints with OR logic.
+// isDayValid combines dayOfMonth and dayOfWeek: OR when both are restricted,
+// AND when either field starts with * (as in Vixie cron).
 func (p *CronParser) isDayValid(year int, month time.Month, day int) bool {
 	if p.dayOfMonthWildcard && p.dayOfWeekWildcard {
 		return true
@@ -255,13 +256,9 @@ func (p *CronParser) isDayValid(year int, month time.Month, day int) bool {
 	domValid := p.isDayOfMonthMatch(year, month, day)
 	dowValid := p.isDayOfWeekMatch(year, month, day)
 
-	if p.dayOfMonthWildcard {
-		return dowValid
+	if p.dayOfMonthStar || p.dayOfWeekStar {
+		return domValid && dowValid
 	}
-	if p.dayOfWeekWildcard {
-		return domValid
-	}
-	// Both specified: OR logic (standard cron behavior)
 	return domValid || dowValid
 }
 
@@ -286,11 +283,16 @@ func (p *CronParser) isDayOfMonthMatch(year int, month time.Month, day int) bool
 	return false
 }
 
-// isDayOfWeekMatch handles nL (last nth weekday of month).
+// isDayOfWeekMatch handles nL (last nth weekday of month) and weekday#n.
 func (p *CronParser) isDayOfWeekMatch(year int, month time.Month, day int) bool {
 	weekday := int(time.Date(year, month, day, 0, 0, 0, 0, p.location).Weekday())
 	for w := range p.dayOfWeek {
-		if w < 0 {
+		if w >= nthWeekdayBase {
+			code := w - nthWeekdayBase
+			if code/10 == weekday && code%10 == (day-1)/7+1 {
+				return true
+			}
+		} else if w < 0 {
 			targetWeekday := -w
 			if targetWeekday == 7 {
 				targetWeekday = 0

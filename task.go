@@ -19,8 +19,9 @@ type TaskInfo struct {
 }
 
 type taskOptions struct {
-	Timeout time.Duration
-	Retry   int
+	Timeout       time.Duration
+	Retry         int
+	RetryInterval time.Duration
 }
 
 type task struct {

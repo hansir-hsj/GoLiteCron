@@ -54,7 +54,8 @@ type TaskConfig struct {
     CronExpr      string `yaml:"cron_expr" json:"cron_expr"`
     Timeout       string `yaml:"timeout" json:"timeout"` // duration string, e.g. "30s"
     Retry         int    `yaml:"retry" json:"retry"`
-    Location      string `yaml:"location" json:"location"`
+    RetryInterval string `yaml:"retry_interval" json:"retry_interval"` // duration string, e.g. "2s"
+    Location      string `yaml:"location" json:"location"`             // IANA name; empty means the host's local zone
     EnableSeconds bool   `yaml:"enable_seconds" json:"enable_seconds"`
     EnableYears   bool   `yaml:"enable_years" json:"enable_years"`
     FuncName      string `yaml:"func_name" json:"func_name"`
@@ -88,26 +89,26 @@ Wraps a simple function into a `Job` interface.
 
 ```go
 func WrapJob(id string, fn any) (Job, error)
-// fn supports: func() error or func(context.Context) error
+// fn supports: func(), func() error, func(context.Context) error, or Job
 ```
 
 ### RegisterJob / GetJob
 
 Manages scheduler-local jobs for configuration loading. `fn` may be a `Job`,
-`func() error`, or `func(context.Context) error`.
+`func()`, `func() error`, or `func(context.Context) error`.
 
 ```go
 func (s *Scheduler) RegisterJob(name string, fn any) error
 func (s *Scheduler) GetJob(name string) (any, bool)
 ```
 
-### LoadFromYaml / LoadFromJson
+### LoadFromYAML / LoadFromJSON
 
-Parses configuration files.
+Parses configuration files. Unknown keys are rejected. `LoadFromYaml` and `LoadFromJson` are deprecated aliases.
 
 ```go
-func LoadFromYaml(path string) (*Config, error)
-func LoadFromJson(path string) (*Config, error)
+func LoadFromYAML(path string) (*Config, error)
+func LoadFromJSON(path string) (*Config, error)
 ```
 
 ## Scheduler Methods
@@ -210,9 +211,10 @@ Configuration options for `AddTask`. `WithTimeout` and `WithRetry` are task-only
 
 - `WithSeconds()`: Enables second-level precision (6 fields).
 - `WithYears()`: Enables year field (7 fields).
-- `WithLocation(loc *time.Location)`: Sets timezone.
+- `WithLocation(loc *time.Location)`: Sets timezone. The default is the host's local zone (`time.Local`), so set it explicitly in production.
 - `WithTimeout(timeout time.Duration)`: Sets how long the scheduler waits before reporting a timeout. Jobs that accept `context.Context` should stop when the context is done. A job that ignores it remains tracked and is not scheduled again until it returns. Timeouts are not retried.
-- `WithRetry(retry int)`: Sets the number of immediate retries on failure; retries have no backoff.
+- `WithRetry(retry int)`: Sets the number of retries on failure. Retries run immediately unless `WithRetryInterval` is set.
+- `WithRetryInterval(interval time.Duration)`: Sets the wait between retry attempts.
 
 ## Behavior Changes
 
@@ -221,6 +223,12 @@ These changes can break existing callers when upgrading:
 - `Shutdown` with no `ctx` deadline returns `ErrShutdownDeadlineRequired` after stopping if tasks are running. Pass a context with a timeout to wait.
 - `WithLogger(nil)` returns an error instead of being ignored.
 - `At()` combined with `Second`, `Minute`, or `Hour` units, and `Every(n)` with `n > 1` on weekday units, make `Do` return an error instead of silently ignoring the setting.
+- `Every(n)` on `Second`, `Minute`, or `Hour` returns an error unless `n` divides 60 (or 24 for hours), because steps align to the clock and other values fire at uneven gaps.
+- `ScheduleBuilder.Do` accepts the same function types as `WrapJob`, including `func(context.Context) error`.
+- `LoadFromYAML` and `LoadFromJSON` reject unknown keys, and a negative `retry`, `timeout`, or `retry_interval` is an error.
+- A removed task that is still running no longer holds its ID; the same ID can be added again immediately.
+- A day-of-month or day-of-week field that starts with `*` (for example `*/2`) combines with the other day field using AND, as in Vixie cron. Two restricted fields still use OR.
+- Day of week accepts `weekday#n` (for example `MON#2`, the second Monday).
 - A number before `L` in day of month (for example `5L`) is rejected; use a bare `L`.
 - Day of week accepts `7` as Sunday, and month and weekday names such as `JAN` and `MON`.
 - A panicking custom logger no longer stops scheduling; the message is written to stderr instead.

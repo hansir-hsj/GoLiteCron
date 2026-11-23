@@ -626,7 +626,7 @@ func TestScheduler_WithLoggerRejectsRunningScheduler(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	if err := s.WithLogger(&stdLogger{Logger: log.New(io.Discard, "", 0)}); err == nil {
+	if err := s.WithLogger(log.New(io.Discard, "", 0)); err == nil {
 		t.Fatal("expected WithLogger to reject changes while scheduler is running")
 	}
 }

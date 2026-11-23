@@ -49,7 +49,13 @@ type CronParser struct {
 	// Track wildcards for dayOfMonth/dayOfWeek OR logic.
 	dayOfMonthWildcard bool
 	dayOfWeekWildcard  bool
+	// Star-prefixed fields such as */2 switch the day rule from OR to AND.
+	dayOfMonthStar bool
+	dayOfWeekStar  bool
 }
+
+// nthWeekdayBase offsets day-of-week keys that encode "weekday#n" as base + weekday*10 + n.
+const nthWeekdayBase = 1000
 
 // ParseOption configures cron expression parsing.
 type ParseOption interface {
@@ -73,6 +79,7 @@ type taskSettings struct {
 	location      *time.Location
 	timeout       time.Duration
 	retry         int
+	retryInterval time.Duration
 }
 
 type secondsOption struct{}
@@ -134,6 +141,19 @@ func (opt retryOption) applyTaskOption(settings *taskSettings) {
 	settings.retry = retry
 }
 
+type retryIntervalOption struct {
+	interval time.Duration
+}
+
+func (opt retryIntervalOption) applyTaskOption(settings *taskSettings) {
+	interval := opt.interval
+	if interval < 0 {
+		interval = 0
+	}
+	settings.retryInterval = interval
+}
+
+// defaultTaskSettings uses the process-local time zone; pass WithLocation for a fixed one.
 func defaultTaskSettings() taskSettings {
 	return taskSettings{
 		location: time.Local,
@@ -164,6 +184,8 @@ func WithYears() ScheduleOption {
 	return yearsOption{}
 }
 
+// WithLocation sets the time zone the expression is evaluated in. The default is time.Local,
+// which depends on the host, so production code should set it explicitly.
 func WithLocation(loc *time.Location) ScheduleOption {
 	return locationOption{location: loc}
 }
@@ -174,6 +196,11 @@ func WithTimeout(timeout time.Duration) TaskOption {
 
 func WithRetry(retry int) TaskOption {
 	return retryOption{retry: retry}
+}
+
+// WithRetryInterval sets the wait between retry attempts. The default is no wait.
+func WithRetryInterval(interval time.Duration) TaskOption {
+	return retryIntervalOption{interval: interval}
 }
 
 func newCronParserFromSettings(expr string, settings taskSettings) (*CronParser, error) {
@@ -233,11 +260,15 @@ func newCronParserFromSettings(expr string, settings taskSettings) (*CronParser,
 		parsed[rule.field] = vals
 
 		isWildcard := part == "*" || part == "?"
+		// Like Vixie cron, any field starting with * (e.g. */2) counts as unrestricted for the day OR rule.
+		isStar := isWildcard || strings.HasPrefix(part, "*")
 		switch rule.field {
 		case dayOfMonthField:
 			parser.dayOfMonthWildcard = isWildcard
+			parser.dayOfMonthStar = isStar
 		case dayOfWeekField:
 			parser.dayOfWeekWildcard = isWildcard
+			parser.dayOfWeekStar = isStar
 		}
 	}
 
@@ -342,6 +373,10 @@ func parseField(field string, min, max int, fieldType fieldType) (map[int]struct
 
 	if strings.Contains(field, ",") {
 		return parseListField(field, min, max, fieldType)
+	}
+
+	if strings.Contains(field, "#") {
+		return parseNthWeekdayField(field, fieldType)
 	}
 
 	// Check "/" before "-" because "10-30/5" contains both but should be handled as step
@@ -501,6 +536,29 @@ func parseLastField(field string, min, max int, fieldType fieldType) (map[int]st
 		return map[int]struct{}{0: {}}, nil
 	}
 	return nil, fmt.Errorf("expression L not allowed in this field: %s", field)
+}
+
+// parseNthWeekdayField parses "weekday#n" (e.g. MON#2 or 1#2), the nth weekday of the month.
+func parseNthWeekdayField(field string, fieldType fieldType) (map[int]struct{}, error) {
+	if fieldType != dayOfWeekField {
+		return nil, fmt.Errorf("expression # only allowed in day-of-week field: %s", field)
+	}
+	parts := strings.Split(field, "#")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid '#' format: %s", field)
+	}
+	weekday, err := strconv.Atoi(parts[0])
+	if err != nil || weekday < 0 || weekday > 7 {
+		return nil, fmt.Errorf("invalid '#' weekday: %s", parts[0])
+	}
+	nth, err := strconv.Atoi(parts[1])
+	if err != nil || nth < 1 || nth > 5 {
+		return nil, fmt.Errorf("invalid '#' occurrence: %s", parts[1])
+	}
+	if weekday == 7 {
+		weekday = 0
+	}
+	return map[int]struct{}{nthWeekdayBase + weekday*10 + nth: {}}, nil
 }
 
 func parseNearestWeekdayField(field string, min, max int, fieldType fieldType) (map[int]struct{}, error) {

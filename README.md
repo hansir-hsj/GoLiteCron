@@ -61,36 +61,12 @@ select {}
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Scheduler["📦 Scheduler"]
-        direction TB
-        
-        subgraph Input["Input Layer"]
-            direction LR
-            ChainAPI["⛓️ Chain API<br/><code>Every().Do()</code>"]
-            CronParser["⏰ Cron Parser<br/><i>5/6/7 fields</i>"]
-            ConfigLoader["📄 Config Loader<br/><i>YAML / JSON</i>"]
-        end
-        
-        Task["📋 Task<br/><code>ID, Job, NextRunTime</code>"]
-        
-        subgraph Storage["Storage Backend"]
-            Heap["🗂️ Heap<br/><i>Priority queue, O(log n)</i>"]
-        end
-        
-        Executor["🚀 Executor<br/><i>Timeout Control · Retry Logic · Panic Recovery</i>"]
-    end
-    
-    ChainAPI --> Task
-    CronParser --> Task
-    ConfigLoader --> Task
-    Task --> Heap
-    Heap --> Executor
-
-    style Scheduler fill:#f8f9fa,stroke:#343a40,stroke-width:2px
-    style Task fill:#e7f3ff,stroke:#0066cc,stroke-width:2px
-    style Executor fill:#d4edda,stroke:#28a745,stroke-width:2px
-    style Heap fill:#fff3cd,stroke:#ffc107,stroke-width:1px
+flowchart LR
+    A[Chain API] --> T[Task]
+    B[Cron Parser<br>5/6/7 fields] --> T
+    C[Config Loader<br>YAML / JSON] --> T
+    T --> H[Heap<br>priority queue, O&#40;log n&#41;]
+    H --> E[Executor<br>timeout / retry / panic recovery]
 ```
 
 ---
@@ -106,7 +82,7 @@ flowchart TB
 * * * * *
 ```
 
-**Special characters:** `*` (any) · `,` (list) · `-` (range) · `/` (step) · `L` (last) · `W` (weekday). Month and weekday names such as `JAN` and `MON` are supported.
+**Special characters:** `*` (any) · `,` (list) · `-` (range) · `/` (step) · `L` (last) · `W` (weekday) · `#` (nth weekday, e.g. `MON#2`). Month and weekday names such as `JAN` and `MON` are supported.
 
 **Macros:** `@yearly` · `@monthly` · `@weekly` · `@daily` · `@hourly`
 

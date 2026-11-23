@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,13 +25,10 @@ type Logger interface {
 	Printf(format string, args ...any)
 }
 
-// stdLogger wraps Go's standard log.Logger.
-type stdLogger struct {
-	*log.Logger
-}
-
-func (l *stdLogger) Printf(format string, args ...any) {
-	l.Logger.Printf(format, args...)
+// drainGroup is a set of tasks a Shutdown is waiting on; done closes once they all return.
+type drainGroup struct {
+	wg   *sync.WaitGroup
+	done chan struct{}
 }
 
 type Scheduler struct {
@@ -41,8 +37,9 @@ type Scheduler struct {
 	loggerMu     sync.RWMutex
 	jobs         map[string]any
 	jobsMu       sync.RWMutex
-	tasksWG      *sync.WaitGroup   // tracks tasks started since the last Shutdown
-	drainingWGs  []*sync.WaitGroup // groups a Shutdown is still draining
+	tasksWG      *sync.WaitGroup // tracks tasks started since the last Shutdown
+	draining     []*drainGroup   // groups a Shutdown is still draining
+	inflight     int32           // tasks started and not yet returned, including removed ones
 	stopChan     chan struct{}
 	runDone      chan struct{}
 	runCancel    context.CancelFunc
@@ -56,7 +53,7 @@ type Scheduler struct {
 func NewScheduler() *Scheduler {
 	return &Scheduler{
 		taskStorage:  newTaskQueue(),
-		logger:       &stdLogger{Logger: log.New(os.Stderr, "", log.LstdFlags)},
+		logger:       log.New(os.Stderr, "", log.LstdFlags),
 		jobs:         make(map[string]any),
 		tasksWG:      &sync.WaitGroup{},
 		stopChan:     make(chan struct{}),
@@ -167,10 +164,26 @@ func (s *Scheduler) LoadTasksFromConfig(config *Config) error {
 			if err != nil {
 				return fmt.Errorf("invalid timeout duration %q for task %s: %w", taskConfig.Timeout, taskConfig.ID, err)
 			}
+			if timeout < 0 {
+				return fmt.Errorf("timeout for task %s must not be negative", taskConfig.ID)
+			}
 			opts = append(opts, WithTimeout(timeout))
+		}
+		if taskConfig.Retry < 0 {
+			return fmt.Errorf("retry for task %s must not be negative", taskConfig.ID)
 		}
 		if taskConfig.Retry > 0 {
 			opts = append(opts, WithRetry(taskConfig.Retry))
+		}
+		if taskConfig.RetryInterval != "" {
+			interval, err := time.ParseDuration(taskConfig.RetryInterval)
+			if err != nil {
+				return fmt.Errorf("invalid retry interval %q for task %s: %w", taskConfig.RetryInterval, taskConfig.ID, err)
+			}
+			if interval < 0 {
+				return fmt.Errorf("retry interval for task %s must not be negative", taskConfig.ID)
+			}
+			opts = append(opts, WithRetryInterval(interval))
 		}
 		if taskConfig.Location != "" {
 			loc, err := time.LoadLocation(taskConfig.Location)
@@ -213,10 +226,7 @@ func (s *Scheduler) GetTask(taskID string) (TaskInfo, bool) {
 	s.taskMu.Lock()
 	defer s.taskMu.Unlock()
 
-	if runningTask, ok := s.lifecycle.getRunning(taskID); ok {
-		if atomic.LoadInt32(&runningTask.Removed) == 1 {
-			return TaskInfo{}, false
-		}
+	if runningTask, ok := s.lifecycle.getRunning(taskID); ok && atomic.LoadInt32(&runningTask.Removed) == 0 {
 		return newTaskInfo(runningTask, true), true
 	}
 	return s.taskStorage.TaskInfoByID(taskID)
@@ -280,7 +290,7 @@ func buildTask(expr string, taskID string, job Job, opts ...TaskOption) (*task, 
 		ID:          taskID,
 		Job:         job,
 		CronParser:  parser,
-		Options:     taskOptions{Timeout: settings.timeout, Retry: settings.retry},
+		Options:     taskOptions{Timeout: settings.timeout, Retry: settings.retry, RetryInterval: settings.retryInterval},
 		NextRunTime: nextRunTime,
 		PreRunTime:  nowInTaskZone,
 	}, nil
@@ -329,8 +339,10 @@ func (s *Scheduler) commitTasks(tasks []*task) error {
 	return nil
 }
 
+// taskIDInUse reports whether taskID is queued or running. A removed task that is
+// still finishing does not hold its ID, so the ID can be added again right away.
 func (s *Scheduler) taskIDInUse(taskID string) bool {
-	if s.lifecycle.isRunning(taskID) {
+	if running, ok := s.lifecycle.getRunning(taskID); ok && atomic.LoadInt32(&running.Removed) == 0 {
 		return true
 	}
 	return s.taskStorage.TaskExist(taskID)
@@ -404,43 +416,39 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	s.stopLocked()
-	s.taskMu.Lock()
-	hasRunningTasks := len(s.lifecycle.running) > 0
-	s.taskMu.Unlock()
-	if _, hasDeadline := ctx.Deadline(); hasRunningTasks && !hasDeadline {
+	if _, hasDeadline := ctx.Deadline(); atomic.LoadInt32(&s.inflight) > 0 && !hasDeadline {
 		s.mu.Unlock()
 		return ErrShutdownDeadlineRequired
 	}
 	// Swap groups so a later Start cannot race this Wait.
-	s.drainingWGs = append(s.drainingWGs, s.tasksWG)
+	group := &drainGroup{wg: s.tasksWG, done: make(chan struct{})}
+	go func() {
+		group.wg.Wait()
+		close(group.done)
+	}()
 	s.tasksWG = &sync.WaitGroup{}
-	waitFor := append([]*sync.WaitGroup(nil), s.drainingWGs...)
+	s.draining = append(pruneDrained(s.draining), group)
+	waitFor := append([]*drainGroup(nil), s.draining...)
 	s.mu.Unlock()
 
-	drained := make(chan struct{})
-	go func() {
-		for _, wg := range waitFor {
-			wg.Wait()
+	for _, g := range waitFor {
+		select {
+		case <-g.done:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		s.mu.Lock()
-		s.drainingWGs = withoutWaitGroups(s.drainingWGs, waitFor)
-		s.mu.Unlock()
-		close(drained)
-	}()
-
-	select {
-	case <-drained:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	return nil
 }
 
-func withoutWaitGroups(groups, drained []*sync.WaitGroup) []*sync.WaitGroup {
+// pruneDrained drops groups whose tasks have all returned.
+func pruneDrained(groups []*drainGroup) []*drainGroup {
 	kept := groups[:0]
-	for _, wg := range groups {
-		if !slices.Contains(drained, wg) {
-			kept = append(kept, wg)
+	for _, g := range groups {
+		select {
+		case <-g.done:
+		default:
+			kept = append(kept, g)
 		}
 	}
 	return kept
@@ -462,6 +470,7 @@ func (s *Scheduler) run(runCtx context.Context, tasksWG *sync.WaitGroup, stopCha
 			tasksToExecute := s.taskStorage.Tick(nowUTC)
 			for _, task := range tasksToExecute {
 				s.lifecycle.markRunning(task)
+				atomic.AddInt32(&s.inflight, 1)
 			}
 			s.taskMu.Unlock()
 			if len(tasksToExecute) == 0 {
@@ -478,13 +487,12 @@ func (s *Scheduler) run(runCtx context.Context, tasksWG *sync.WaitGroup, stopCha
 
 func (s *Scheduler) executeTask(runCtx context.Context, tasksWG *sync.WaitGroup, t *task) {
 	defer tasksWG.Done()
+	defer atomic.AddInt32(&s.inflight, -1)
 	defer func() {
 		if r := recover(); r != nil {
 			// Release the running slot that rescheduleTask did not reach.
 			s.taskMu.Lock()
-			if current, ok := s.lifecycle.getRunning(t.ID); ok && current == t {
-				s.lifecycle.unmarkRunning(t.ID)
-			}
+			s.lifecycle.unmarkRunning(t)
 			s.taskMu.Unlock()
 			s.logf("Recovered from panic in task %s: %v\n", t.ID, r)
 		}
@@ -514,24 +522,43 @@ func (s *Scheduler) waitTimedOutTask(t *task, pending <-chan error) {
 	}
 }
 
-// runTaskWithRetry retries immediately; timeouts are not retried because the job may still run.
+// runTaskWithRetry retries after Options.RetryInterval; timeouts are not retried because the job may still run.
 func (s *Scheduler) runTaskWithRetry(runCtx context.Context, t *task) <-chan error {
-	for attempt := 0; attempt < t.Options.Retry+1; attempt++ {
+	attempts := t.Options.Retry + 1
+	for attempt := 1; attempt <= attempts; attempt++ {
 		timedOut, pending, err := s.runTaskAttempt(runCtx, t)
-		if errors.Is(err, context.Canceled) {
+		// Only a scheduler cancel stops retries; an error the job wrapped from its own context does not.
+		if err != nil && runCtx.Err() != nil {
 			return pending
 		}
 		if timedOut {
 			s.logf("Task %s timed out, skipping retries to prevent goroutine accumulation\n", t.ID)
 			return pending
 		}
-		if err != nil {
-			s.logf("Error executing task %s: %v (retry %d)\n", t.ID, err, attempt)
-			continue
+		if err == nil {
+			return nil
 		}
-		return nil
+		s.logf("Error executing task %s: %v (attempt %d/%d)\n", t.ID, err, attempt, attempts)
+		if attempt < attempts && !sleepCtx(runCtx, t.Options.RetryInterval) {
+			return nil
+		}
 	}
 	return nil
+}
+
+// sleepCtx waits for d and reports false if ctx ends first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *Scheduler) runTaskAttempt(runCtx context.Context, t *task) (timedOut bool, pending <-chan error, err error) {
@@ -578,7 +605,7 @@ func (s *Scheduler) rescheduleTask(t *task) {
 
 	if nextRunTime.IsZero() {
 		s.taskMu.Lock()
-		s.lifecycle.unmarkRunning(t.ID)
+		s.lifecycle.unmarkRunning(t)
 		s.taskMu.Unlock()
 		s.logf("Task %s: failed to calculate next run time, task will not be rescheduled\n", t.ID)
 		return
@@ -595,7 +622,7 @@ func (s *Scheduler) rescheduleTask(t *task) {
 
 	s.taskMu.Lock()
 	defer s.taskMu.Unlock()
-	s.lifecycle.unmarkRunning(t.ID)
+	s.lifecycle.unmarkRunning(t)
 
 	if atomic.LoadInt32(&t.Removed) == 1 {
 		return
